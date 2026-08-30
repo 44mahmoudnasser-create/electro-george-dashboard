@@ -9,7 +9,8 @@ export function createSupabaseServerClient() {
     {
       cookies: {
         getAll() { return cookieStore.getAll(); },
-        setAll(cs) {
+        // التعديل هنا: إضافة النوع (cs: any[])
+        setAll(cs: any[]) {
           try { cs.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); }
           catch {}
         },
