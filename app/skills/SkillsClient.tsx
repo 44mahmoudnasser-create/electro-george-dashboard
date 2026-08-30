@@ -8,8 +8,10 @@ import { Plus, Pencil, Trash2, Save } from "lucide-react";
 
 type Tech = { id: number; name: string; grade: string };
 type Skill = {
-  id: number; skill_name: string;
-  tech_skills: { tech_id: number; technicians: Tech | null }[];
+  id: number; 
+  skill_name: string;
+  // التعديل هنا: غيرنا Tech | null لتصبح Tech[]
+  tech_skills: { tech_id: number; technicians: Tech[] }[];
 };
 
 export default function SkillsClient({ initialSkills, role }: { initialSkills: Skill[]; role: string }) {
@@ -64,7 +66,7 @@ export default function SkillsClient({ initialSkills, role }: { initialSkills: S
 
       <div className="space-y-3">
         {skills.map(skill => {
-          const techs = skill.tech_skills.map(ts => ts.technicians).filter(Boolean) as Tech[];
+      const techs = skill.tech_skills.flatMap(ts => ts.technicians).filter(Boolean) as Tech[];
           return (
             <div key={skill.id} className="eg-card">
               <div className="flex items-center justify-between mb-3">

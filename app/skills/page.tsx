@@ -17,9 +17,10 @@ export default async function SkillsPage() {
     tech_skills ( tech_id, technicians ( id, name, grade ) )
   `).order("skill_name");
 
-  return (
+return (
     <AppShell role={role}>
-      <SkillsClient initialSkills={skills ?? []} role={role} />
+      {/* التعديل هنا: إضافة (skills as any) لحل مشكلة تطابق الأنواع */}
+      <SkillsClient initialSkills={(skills as any) ?? []} role={role} />
     </AppShell>
   );
 }
