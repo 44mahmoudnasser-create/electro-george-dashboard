@@ -9,7 +9,8 @@ export async function middleware(request: NextRequest) {
     {
       cookies: {
         getAll() { return request.cookies.getAll(); },
-        setAll(cs) {
+        // التعديل هنا: إضافة النوع (cs: any[])
+        setAll(cs: any[]) {
           cs.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
           cs.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
@@ -17,10 +18,13 @@ export async function middleware(request: NextRequest) {
       },
     }
   );
+  
   const { data: { user } } = await supabase.auth.getUser();
   const { pathname } = request.nextUrl;
+  
   if (!user && pathname !== "/login") return NextResponse.redirect(new URL("/login", request.url));
   if (user && pathname === "/login") return NextResponse.redirect(new URL("/dashboard", request.url));
+  
   return response;
 }
 
