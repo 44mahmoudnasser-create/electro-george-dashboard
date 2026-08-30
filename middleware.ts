@@ -9,7 +9,6 @@ export async function middleware(request: NextRequest) {
     {
       cookies: {
         getAll() { return request.cookies.getAll(); },
-        // التعديل هنا: إضافة النوع (cs: any[])
         setAll(cs: any[]) {
           cs.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
@@ -19,7 +18,10 @@ export async function middleware(request: NextRequest) {
     }
   );
   
-  const { data: { user } } = await supabase.auth.getUser();
+  // 1. التعديل هنا: استخدام getSession السريعة التي تقرأ من الـ Cookies
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
+  
   const { pathname } = request.nextUrl;
   
   if (!user && pathname !== "/login") return NextResponse.redirect(new URL("/login", request.url));
@@ -29,5 +31,6 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // 2. التعديل هنا: استثناء الـ /api ومفاتيح أخرى لتخفيف الضغط على الـ Middleware
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/.*).*)"],
 };
