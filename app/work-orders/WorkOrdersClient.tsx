@@ -135,7 +135,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           </tr></thead>
           <tbody>
             {sorted.map(w => (
-                <tr key={w.id} className="cursor-pointer hover:bg-card2 transition-colors" onClick={() => openDetailModal(w)}>
+          <tr key={w.id} className="cursor-pointer hover:bg-card2 transition-colors" onClick={() => openDetailModal(w)}>
                   <td className="font-mono text-accent font-semibold">{w.wo_number}</td>
                 <td><Badge label={w.status} /></td>
                 <td className="text-subtext">{w.created_date ?? "—"}</td>
@@ -174,9 +174,51 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           </button>
         </div>
       </Modal>
+{/* Detail / Edit Modal */}
+      <Modal open={!!detailWO} onClose={() => setDetailWO(null)} title={`أمر الشغل: ${detailWO?.wo_number}`} size="lg">
+        {detailWO && (
+          <div className="space-y-5">
+            {/* Status + delivery */}
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="eg-label">الحالة</label>
+                <select value={detailWO.status}
+                  onChange={e => updateWO(detailWO.id, { status: e.target.value })}
+                  className="eg-select" disabled={role !== "admin"}>
+                  {STATUSES.map(s=><option key={s}>{s}</option>)}
+                </select></div>
+              <div><label className="eg-label">التسليم المتوقع</label>
+                <input type="date" value={detailWO.expected_delivery ?? ""}
+                  onChange={e => updateWO(detailWO.id, { expected_delivery: e.target.value })}
+                  className="eg-input" disabled={role !== "admin"} /></div>
+            </div>
+            {/* Info */}
+            <div className="bg-card2 rounded-lg p-4 grid grid-cols-2 gap-3 text-sm">
+              {[["الإنشاء", detailWO.created_date],["الإتمام", detailWO.completion_date ?? "—"]].map(([l,v])=>(
+                <div key={l}><p className="text-subtext text-xs">{l}</p><p className="text-text font-medium">{v}</p></div>
+              ))}
+            </div>
+            
+            {/* Checklist */}
+            {true && (
+              <div className="bg-card2 rounded-lg p-4 space-y-3">
+                <p className="text-sm font-semibold text-text mb-2">✅ قائمة التحقق</p>
+                {[
+                  { key:"chk_client",   label:"استلمه العميل" },
+                  { key:"chk_quality",  label:"استلمه قسم الجودة" },
+                  { key:"chk_assembly", label:"تم الانتهاء من التجميع الكهربي" },
+                ].map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                      checked={!!detailWO[key as keyof WorkOrder]}
+                      onChange={e => updateWO(detailWO.id, { [key]: e.target.checked } as Partial<WorkOrder>)}
+                      className="w-5 h-5 accent-emerald-500 cursor-pointer" />
+                    <span className="text-sm text-text">{label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
 
-      {/* Detail / Edit Modal */}
-      {/* التبويبات (Tabs) والجداول */}
+            {/* --- بداية التبويبات الجديدة (تأكدنا إنها جوه الـ Modal) --- */}
             {loadingDetails ? (
               <div className="text-center py-4 text-subtext text-sm">جاري جلب التفاصيل...</div>
             ) : (
@@ -184,9 +226,9 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
                 {/* أزرار التبويبات */}
                 <div className="flex gap-1 overflow-x-auto pb-1">
                   {[
-                    { key: "prod", label: `الإنتاجية (${relatedData.productivity.length})` },
-                    { key: "files", label: `الملفات (${relatedData.files.length})` },
-                    { key: "purchases", label: `المشتريات (${relatedData.purchases.length})` },
+                    { key: "prod", label: `الإنتاجية (${relatedData.productivity?.length || 0})` },
+                    { key: "files", label: `الملفات (${relatedData.files?.length || 0})` },
+                    { key: "purchases", label: `المشتريات (${relatedData.purchases?.length || 0})` },
                   ].map(({ key, label }) => (
                     <button key={key} type="button"
                       onClick={() => setActiveTab(key as any)}
@@ -201,7 +243,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
                 <div className="eg-card overflow-x-auto">
                   {/* جدول الإنتاجية */}
                   {activeTab === "prod" && (
-                    relatedData.productivity.length ? (
+                    relatedData.productivity?.length ? (
                       <table className="eg-table">
                         <thead><tr><th>الفني</th><th>التاريخ</th><th>المهمة</th><th>ملاحظات</th></tr></thead>
                         <tbody>{relatedData.productivity.map((p, i) => (
@@ -218,7 +260,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
 
                   {/* جدول الملفات */}
                   {activeTab === "files" && (
-                    relatedData.files.length ? (
+                    relatedData.files?.length ? (
                       <table className="eg-table">
                         <thead><tr><th>الملف</th><th>النوع</th><th>استلام</th><th>سُلِّم لـ</th><th>تاريخ التسليم</th></tr></thead>
                         <tbody>{relatedData.files.map((f, i) => (
@@ -236,7 +278,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
 
                   {/* جدول المشتريات */}
                   {activeTab === "purchases" && (
-                    relatedData.purchases.length ? (
+                    relatedData.purchases?.length ? (
                       <table className="eg-table">
                         <thead><tr><th>الصنف</th><th>الكمية</th><th>طلب</th><th>توريد</th><th>الحالة</th><th>صورة</th></tr></thead>
                         <tbody>{relatedData.purchases.map((p, i) => (
@@ -262,47 +304,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
                 </div>
               </div>
             )}
-      <Modal open={!!detailWO} onClose={() => setDetailWO(null)} title={`أمر الشغل: ${detailWO?.wo_number}`} size="lg">
-        {detailWO && (
-          <div className="space-y-5">
-            {/* Status + delivery */}
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="eg-label">الحالة</label>
-                <select value={detailWO.status}
-                  onChange={e => updateWO(detailWO.id, { status: e.target.value })}
-                  className="eg-select" disabled={role !== "admin"}>
-                  {STATUSES.map(s=><option key={s}>{s}</option>)}
-                </select></div>
-              <div><label className="eg-label">التسليم المتوقع</label>
-                <input type="date" value={detailWO.expected_delivery ?? ""}
-                  onChange={e => updateWO(detailWO.id, { expected_delivery: e.target.value })}
-                  className="eg-input" disabled={role !== "admin"} /></div>
-            </div>
-            {/* Info */}
-            <div className="bg-card2 rounded-lg p-4 grid grid-cols-2 gap-3 text-sm">
-              {[["الإنشاء", detailWO.created_date],["الإتمام", detailWO.completion_date ?? "—"]].map(([l,v])=>(
-                <div key={l}><p className="text-subtext text-xs">{l}</p><p className="text-text font-medium">{v}</p></div>
-              ))}
-            </div>
-            {/* Checklist */}
-            {true && (
-              <div className="bg-card2 rounded-lg p-4 space-y-3">
-                <p className="text-sm font-semibold text-text mb-2">✅ قائمة التحقق</p>
-                {[
-                  { key:"chk_client",   label:"استلمه العميل" },
-                  { key:"chk_quality",  label:"استلمه قسم الجودة" },
-                  { key:"chk_assembly", label:"تم الانتهاء من التجميع الكهربي" },
-                ].map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                      checked={!!detailWO[key as keyof WorkOrder]}
-                      onChange={e => updateWO(detailWO.id, { [key]: e.target.checked } as Partial<WorkOrder>)}
-                      className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                    <span className="text-sm text-text">{label}</span>
-                  </label>
-                ))}
-              </div>
-            )}
+            {/* --- نهاية التبويبات --- */}
           </div>
         )}
       </Modal>
