@@ -66,7 +66,38 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
     setWOs(prev => prev.map(w => w.id === id ? { ...w, ...patch, ...auto } : w));
     setDetailWO(prev => prev ? { ...prev, ...patch, ...auto } : prev);
   };
+// 1. حالات جديدة لتخزين البيانات والتبويبات
+  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases">("prod");
+  const [relatedData, setRelatedData] = useState({ productivity: [] as any[], files: [] as any[], purchases: [] as any[] });
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
+  // 2. دالة لجلب الصورة
+  const getImageUrl = (path: string) => {
+    if (!path) return "";
+    const { data } = supabase.storage.from("purchases").getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  // 3. دالة تفتح الـ Modal وتجلب البيانات الخاصة بأمر الشغل
+  const openDetailModal = async (w: WorkOrder) => {
+    setDetailWO(w);
+    setActiveTab("prod");
+    setLoadingDetails(true);
+
+    const [ { data: prod }, { data: files }, { data: pur } ] = await Promise.all([
+      supabase.from("daily_productivity").select("work_date, task, notes, technicians(name)").eq("wo_id", w.id).order("work_date", { ascending: false }),
+      supabase.from("files").select("file_name, file_type, receive_date, delivery_date, technicians(name)").eq("wo_id", w.id),
+      supabase.from("purchases").select("item_name, qty, request_date, supply_date, status, image_path").eq("wo_id", w.id)
+    ]);
+
+    setRelatedData({
+      productivity: (prod ?? []).map((p: any) => ({ ...p, tech_name: p.technicians?.name })),
+      files: (files ?? []).map((f: any) => ({ ...f, supervisor_name: f.technicians?.name })),
+      purchases: pur ?? []
+    });
+    
+    setLoadingDetails(false);
+  };
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-7xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -104,8 +135,8 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           </tr></thead>
           <tbody>
             {sorted.map(w => (
-              <tr key={w.id} className="cursor-pointer" onClick={() => setDetailWO(w)}>
-                <td className="font-mono text-accent font-semibold">{w.wo_number}</td>
+                <tr key={w.id} className="cursor-pointer hover:bg-card2 transition-colors" onClick={() => openDetailModal(w)}>
+                  <td className="font-mono text-accent font-semibold">{w.wo_number}</td>
                 <td><Badge label={w.status} /></td>
                 <td className="text-subtext">{w.created_date ?? "—"}</td>
                 <td className={
@@ -145,6 +176,92 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
       </Modal>
 
       {/* Detail / Edit Modal */}
+      {/* التبويبات (Tabs) والجداول */}
+            {loadingDetails ? (
+              <div className="text-center py-4 text-subtext text-sm">جاري جلب التفاصيل...</div>
+            ) : (
+              <div className="space-y-4 pt-4 border-t border-border/50">
+                {/* أزرار التبويبات */}
+                <div className="flex gap-1 overflow-x-auto pb-1">
+                  {[
+                    { key: "prod", label: `الإنتاجية (${relatedData.productivity.length})` },
+                    { key: "files", label: `الملفات (${relatedData.files.length})` },
+                    { key: "purchases", label: `المشتريات (${relatedData.purchases.length})` },
+                  ].map(({ key, label }) => (
+                    <button key={key} type="button"
+                      onClick={() => setActiveTab(key as any)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all
+                        ${activeTab === key ? "bg-accent text-white" : "bg-card2 text-subtext hover:text-text"}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* محتوى التبويبات */}
+                <div className="eg-card overflow-x-auto">
+                  {/* جدول الإنتاجية */}
+                  {activeTab === "prod" && (
+                    relatedData.productivity.length ? (
+                      <table className="eg-table">
+                        <thead><tr><th>الفني</th><th>التاريخ</th><th>المهمة</th><th>ملاحظات</th></tr></thead>
+                        <tbody>{relatedData.productivity.map((p, i) => (
+                          <tr key={i}>
+                            <td className="text-text font-medium">{p.tech_name ?? "—"}</td>
+                            <td className="text-subtext">{p.work_date}</td>
+                            <td className="text-text">{p.task}</td>
+                            <td className="text-subtext">{p.notes ?? "—"}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    ) : <EmptyState message="لا توجد سجلات إنتاجية لهذا الأمر" />
+                  )}
+
+                  {/* جدول الملفات */}
+                  {activeTab === "files" && (
+                    relatedData.files.length ? (
+                      <table className="eg-table">
+                        <thead><tr><th>الملف</th><th>النوع</th><th>استلام</th><th>سُلِّم لـ</th><th>تاريخ التسليم</th></tr></thead>
+                        <tbody>{relatedData.files.map((f, i) => (
+                          <tr key={i}>
+                            <td className="text-text">{f.file_name}</td>
+                            <td className="text-subtext">{f.file_type ?? "—"}</td>
+                            <td className="text-subtext">{f.receive_date ?? "—"}</td>
+                            <td className="text-text">{f.supervisor_name ?? "—"}</td>
+                            <td className="text-subtext">{f.delivery_date ?? "—"}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    ) : <EmptyState message="لا توجد ملفات" />
+                  )}
+
+                  {/* جدول المشتريات */}
+                  {activeTab === "purchases" && (
+                    relatedData.purchases.length ? (
+                      <table className="eg-table">
+                        <thead><tr><th>الصنف</th><th>الكمية</th><th>طلب</th><th>توريد</th><th>الحالة</th><th>صورة</th></tr></thead>
+                        <tbody>{relatedData.purchases.map((p, i) => (
+                          <tr key={i}>
+                            <td className="text-text">{p.item_name}</td>
+                            <td>{p.qty}</td>
+                            <td className="text-subtext">{p.request_date ?? "—"}</td>
+                            <td className={p.supply_date && p.supply_date < todayStr && p.status === "مفتوح" ? "text-danger font-medium" : "text-subtext"}>
+                              {p.supply_date ?? "—"}
+                            </td>
+                            <td><Badge label={p.status} /></td>
+                            <td>
+                              {p.image_path ? (
+                                <a href={getImageUrl(p.image_path)} target="_blank" rel="noopener noreferrer"
+                                  className="text-accent text-xs hover:underline">عرض</a>
+                              ) : <span className="text-subtext text-xs">—</span>}
+                            </td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    ) : <EmptyState message="لا توجد طلبات شراء" />
+                  )}
+                </div>
+              </div>
+            )}
       <Modal open={!!detailWO} onClose={() => setDetailWO(null)} title={`أمر الشغل: ${detailWO?.wo_number}`} size="lg">
         {detailWO && (
           <div className="space-y-5">
