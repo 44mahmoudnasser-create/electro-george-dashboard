@@ -11,13 +11,16 @@ export default async function PurchasesPage() {
   if (!user) redirect("/login");
   const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
   const role = appUser?.role ?? "secretary";
-  const [{ data: purchases }, { data: wos }] = await Promise.all([
-    supabase.from("purchases").select("*, work_order:work_orders(wo_number)").order("id", { ascending: false }),
+  const [{ data: orders }, { data: wos }] = await Promise.all([
+    supabase
+      .from("purchase_orders")
+      .select("*, work_order:work_orders(wo_number), purchase_items(*)")
+      .order("id", { ascending: false }),
     supabase.from("work_orders").select("id,wo_number").order("id", { ascending: false }),
   ]);
   return (
     <AppShell role={role}>
-      <PurchasesClient initialPurchases={purchases ?? []} wos={wos ?? []} role={role} />
+      <PurchasesClient initialOrders={orders ?? []} wos={wos ?? []} role={role} />
     </AppShell>
   );
 }
