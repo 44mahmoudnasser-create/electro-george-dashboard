@@ -27,7 +27,7 @@ interface PurchaseItem {
 
 interface PurchaseOrder {
   id: number;
-  order_no: number;
+  order_no: string | null;
   wo_id: number | null;
   request_date: string;
   image_path: string | null;
@@ -46,10 +46,8 @@ const emptyItemForm = (): ItemForm => ({
   item_name: "", category: "عدد", quantity: "1", supply_date: "", status: "مفتوح",
 });
 
-type OrderForm = { wo_id: string; image: File | null };
-const emptyOrderForm = (): OrderForm => ({ wo_id: "", image: null });
-
-const formatOrderNo = (n: number) => `PO-${String(n).padStart(4, "0")}`;
+type OrderForm = { order_no: string; wo_id: string; image: File | null };
+const emptyOrderForm = (): OrderForm => ({ order_no: "", wo_id: "", image: null });
 
 export default function PurchasesClient({
   initialOrders, wos, role,
@@ -107,7 +105,11 @@ export default function PurchasesClient({
 
     const { data: order, error: orderErr } = await supabase
       .from("purchase_orders")
-      .insert({ wo_id: newOrder.wo_id ? parseInt(newOrder.wo_id) : null, request_date: todayStr })
+      .insert({
+        order_no: newOrder.order_no.trim() || null,
+        wo_id: newOrder.wo_id ? parseInt(newOrder.wo_id) : null,
+        request_date: todayStr,
+      })
       .select("*, work_order:work_orders(wo_number)")
       .single();
     if (orderErr) { alert(orderErr.message); setSaving(false); return; }
@@ -140,13 +142,16 @@ export default function PurchasesClient({
   // ---------------------------------------------------------------------
   const openEditOrder = (order: PurchaseOrder) => {
     setEditOrder(order);
-    setEditOrderForm({ wo_id: order.wo_id ? String(order.wo_id) : "", image: null });
+    setEditOrderForm({ order_no: order.order_no ?? "", wo_id: order.wo_id ? String(order.wo_id) : "", image: null });
   };
 
   const submitEditOrder = async () => {
     if (!editOrder) return;
     setSaving(true);
-    const payload = { wo_id: editOrderForm.wo_id ? parseInt(editOrderForm.wo_id) : null };
+    const payload = {
+      order_no: editOrderForm.order_no.trim() || null,
+      wo_id: editOrderForm.wo_id ? parseInt(editOrderForm.wo_id) : null,
+    };
     const { error } = await supabase.from("purchase_orders").update(payload).eq("id", editOrder.id);
     if (error) { alert(error.message); setSaving(false); return; }
     let newImagePath = editOrder.image_path;
@@ -259,6 +264,9 @@ export default function PurchasesClient({
     value: OrderForm; onChange: (patch: Partial<OrderForm>) => void; currentImagePath?: string | null;
   }) => (
     <div className="space-y-4">
+      <div><label className="eg-label">رقم أمر الشراء</label>
+        <input value={value.order_no} onChange={e => onChange({ order_no: e.target.value })}
+          placeholder="مثال: 125 أو PO-2026-01" className="eg-input" /></div>
       <div><label className="eg-label">أمر الشغل</label>
         <select value={value.wo_id} onChange={e => onChange({ wo_id: e.target.value })} className="eg-select">
           <option value="">— بدون أمر شغل —</option>
@@ -297,7 +305,7 @@ export default function PurchasesClient({
             <summary className="flex items-center justify-between gap-3 p-3 cursor-pointer select-none list-none flex-wrap">
               <div className="flex items-center gap-3 flex-wrap">
                 <ChevronDown className="w-4 h-4 text-subtext transition-transform group-open:rotate-180" />
-                <span className="font-mono font-bold text-text">{formatOrderNo(order.order_no)}</span>
+                <span className="font-mono font-bold text-text">{order.order_no ? `#${order.order_no}` : "بدون رقم"}</span>
                 <span className="font-mono text-accent">{order.work_order?.wo_number ?? "بدون أمر شغل"}</span>
                 <span className="text-subtext text-xs">طلب بتاريخ {order.request_date}</span>
                 <span className="text-subtext text-xs">· {order.purchase_items.length} بند</span>
@@ -399,7 +407,7 @@ export default function PurchasesClient({
       </Modal>
 
       {/* تعديل بيانات أمر الشراء (أمر الشغل + الصورة) */}
-      <Modal open={!!editOrder} onClose={() => setEditOrder(null)} title={editOrder ? `تعديل ${formatOrderNo(editOrder.order_no)}` : "تعديل الأمر"}>
+      <Modal open={!!editOrder} onClose={() => setEditOrder(null)} title={editOrder ? `تعديل الأمر ${editOrder.order_no ? "#" + editOrder.order_no : ""}` : "تعديل الأمر"}>
         <OrderFields value={editOrderForm} onChange={patch => setEditOrderForm(f => ({ ...f, ...patch }))}
           currentImagePath={editOrder?.image_path} />
         <button onClick={submitEditOrder} disabled={saving} className="eg-btn-success w-full justify-center mt-5">
