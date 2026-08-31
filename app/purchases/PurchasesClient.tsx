@@ -9,7 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown } from "lucide-react";
 
 // ---------------------------------------------------------------------
-// أنواع البيانات: أمر شراء (Header) بداخله بنود (كل بند له فئة وكمية وحالة)
+// أنواع البيانات: أمر شراء (Header - له رقم تسلسلي وصورة) بداخله بنود
 // ---------------------------------------------------------------------
 const CATEGORIES = ["عدد", "كيلو", "جرام", "علبة"] as const;
 type Category = typeof CATEGORIES[number];
@@ -23,13 +23,14 @@ interface PurchaseItem {
   quantity: number;
   status: string;
   supply_date: string | null;
-  image_path: string | null;
 }
 
 interface PurchaseOrder {
   id: number;
+  order_no: number;
   wo_id: number | null;
   request_date: string;
+  image_path: string | null;
   work_order?: { wo_number: string } | null;
   purchase_items: PurchaseItem[];
 }
@@ -40,12 +41,15 @@ type ItemForm = {
   quantity: string;
   supply_date: string;
   status: string;
-  image: File | null;
 };
-
 const emptyItemForm = (): ItemForm => ({
-  item_name: "", category: "عدد", quantity: "1", supply_date: "", status: "مفتوح", image: null,
+  item_name: "", category: "عدد", quantity: "1", supply_date: "", status: "مفتوح",
 });
+
+type OrderForm = { wo_id: string; image: File | null };
+const emptyOrderForm = (): OrderForm => ({ wo_id: "", image: null });
+
+const formatOrderNo = (n: number) => `PO-${String(n).padStart(4, "0")}`;
 
 export default function PurchasesClient({
   initialOrders, wos, role,
@@ -54,11 +58,15 @@ export default function PurchasesClient({
   const todayStr = today();
   const isAdmin = role === "admin";
 
-  // ---------- مودال: أمر شراء جديد (ببنوده) ----------
+  // ---------- مودال: أمر شراء جديد (ببنوده + صورته) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
-  const [newOrderWoId, setNewOrderWoId] = useState("");
+  const [newOrder, setNewOrder] = useState<OrderForm>(emptyOrderForm());
   const [newOrderItems, setNewOrderItems] = useState<ItemForm[]>([emptyItemForm()]);
   const [saving, setSaving] = useState(false);
+
+  // ---------- مودال: تعديل بيانات أمر الشراء (أمر الشغل + الصورة) ----------
+  const [editOrder, setEditOrder] = useState<PurchaseOrder | null>(null);
+  const [editOrderForm, setEditOrderForm] = useState<OrderForm>(emptyOrderForm());
 
   // ---------- مودال: إضافة بند لأمر شراء موجود ----------
   const [addItemOrderId, setAddItemOrderId] = useState<number | null>(null);
@@ -66,12 +74,12 @@ export default function PurchasesClient({
 
   // ---------- مودال: تعديل بند ----------
   const [editItem, setEditItem] = useState<PurchaseItem | null>(null);
-  const [editForm, setEditForm] = useState<ItemForm>(emptyItemForm());
+  const [editItemForm, setEditItemForm] = useState<ItemForm>(emptyItemForm());
 
-  const uploadItemImage = async (file: File, itemId: number) => {
-    const path = `purchases/${itemId}/${Date.now()}_${file.name}`;
+  const uploadOrderImage = async (file: File, orderId: number) => {
+    const path = `purchases/${orderId}/${Date.now()}_${file.name}`;
     await supabase.storage.from("purchases").upload(path, file, { upsert: true });
-    await supabase.from("purchase_items").update({ image_path: path }).eq("id", itemId);
+    await supabase.from("purchase_orders").update({ image_path: path }).eq("id", orderId);
     return path;
   };
 
@@ -82,9 +90,9 @@ export default function PurchasesClient({
   };
 
   // ---------------------------------------------------------------------
-  // إنشاء أمر شراء جديد مع كل بنوده دفعة واحدة
+  // إنشاء أمر شراء جديد (بصورته) مع كل بنوده دفعة واحدة
   // ---------------------------------------------------------------------
-  const resetNewOrder = () => { setNewOrderWoId(""); setNewOrderItems([emptyItemForm()]); };
+  const resetNewOrder = () => { setNewOrder(emptyOrderForm()); setNewOrderItems([emptyItemForm()]); };
 
   const updateNewOrderItem = (idx: number, patch: Partial<ItemForm>) => {
     setNewOrderItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
@@ -99,10 +107,13 @@ export default function PurchasesClient({
 
     const { data: order, error: orderErr } = await supabase
       .from("purchase_orders")
-      .insert({ wo_id: newOrderWoId ? parseInt(newOrderWoId) : null, request_date: todayStr })
+      .insert({ wo_id: newOrder.wo_id ? parseInt(newOrder.wo_id) : null, request_date: todayStr })
       .select("*, work_order:work_orders(wo_number)")
       .single();
     if (orderErr) { alert(orderErr.message); setSaving(false); return; }
+
+    let orderImagePath = order.image_path;
+    if (newOrder.image) orderImagePath = await uploadOrderImage(newOrder.image, order.id);
 
     const rowsToInsert = validItems.map(it => ({
       purchase_order_id: order.id,
@@ -116,17 +127,35 @@ export default function PurchasesClient({
       .from("purchase_items").insert(rowsToInsert).select("*");
     if (itemsErr) { alert(itemsErr.message); setSaving(false); return; }
 
-    // رفع الصور لو موجودة، بالترتيب نفسه
-    for (let i = 0; i < validItems.length; i++) {
-      const file = validItems[i].image;
-      if (file) await uploadItemImage(file, insertedItems[i].id);
-    }
-    // بعد رفع الصور، جيب البنود تاني عشان image_path يكون محدث في الواجهة
-    const { data: refreshedItems } = await supabase
-      .from("purchase_items").select("*").eq("purchase_order_id", order.id);
-
-    setOrders(prev => [{ ...order, purchase_items: (refreshedItems ?? insertedItems) as PurchaseItem[] }, ...prev]);
+    setOrders(prev => [{
+      ...order,
+      image_path: orderImagePath,
+      purchase_items: insertedItems as PurchaseItem[],
+    }, ...prev]);
     setAddOrderOpen(false); resetNewOrder(); setSaving(false);
+  };
+
+  // ---------------------------------------------------------------------
+  // تعديل بيانات أمر الشراء (أمر الشغل + استبدال الصورة)
+  // ---------------------------------------------------------------------
+  const openEditOrder = (order: PurchaseOrder) => {
+    setEditOrder(order);
+    setEditOrderForm({ wo_id: order.wo_id ? String(order.wo_id) : "", image: null });
+  };
+
+  const submitEditOrder = async () => {
+    if (!editOrder) return;
+    setSaving(true);
+    const payload = { wo_id: editOrderForm.wo_id ? parseInt(editOrderForm.wo_id) : null };
+    const { error } = await supabase.from("purchase_orders").update(payload).eq("id", editOrder.id);
+    if (error) { alert(error.message); setSaving(false); return; }
+    let newImagePath = editOrder.image_path;
+    if (editOrderForm.image) newImagePath = await uploadOrderImage(editOrderForm.image, editOrder.id);
+    const wo = wos.find(w => String(w.id) === editOrderForm.wo_id);
+    setOrders(prev => prev.map(o => o.id === editOrder.id
+      ? { ...o, ...payload, image_path: newImagePath, work_order: wo ? { wo_number: wo.wo_number } : null }
+      : o));
+    setEditOrder(null); setSaving(false);
   };
 
   // ---------------------------------------------------------------------
@@ -147,7 +176,6 @@ export default function PurchasesClient({
     };
     const { data, error } = await supabase.from("purchase_items").insert(payload).select("*").single();
     if (error) { alert(error.message); setSaving(false); return; }
-    if (addItemForm.image) await uploadItemImage(addItemForm.image, data.id);
     setOrders(prev => prev.map(o => o.id === addItemOrderId
       ? { ...o, purchase_items: [...o.purchase_items, data] } : o));
     setAddItemOrderId(null); setSaving(false);
@@ -158,9 +186,9 @@ export default function PurchasesClient({
   // ---------------------------------------------------------------------
   const openEditItem = (item: PurchaseItem) => {
     setEditItem(item);
-    setEditForm({
+    setEditItemForm({
       item_name: item.item_name, category: item.category, quantity: String(item.quantity),
-      supply_date: item.supply_date ?? "", status: item.status, image: null,
+      supply_date: item.supply_date ?? "", status: item.status,
     });
   };
 
@@ -168,15 +196,14 @@ export default function PurchasesClient({
     if (!editItem) return;
     setSaving(true);
     const payload = {
-      item_name: editForm.item_name || editItem.item_name,
-      category: editForm.category,
-      quantity: parseFloat(editForm.quantity) || editItem.quantity,
-      status: editForm.status,
-      supply_date: editForm.supply_date || null,
+      item_name: editItemForm.item_name || editItem.item_name,
+      category: editItemForm.category,
+      quantity: parseFloat(editItemForm.quantity) || editItem.quantity,
+      status: editItemForm.status,
+      supply_date: editItemForm.supply_date || null,
     };
     const { error } = await supabase.from("purchase_items").update(payload).eq("id", editItem.id);
     if (error) { alert(error.message); setSaving(false); return; }
-    if (editForm.image) await uploadItemImage(editForm.image, editItem.id);
     setOrders(prev => prev.map(o => ({
       ...o,
       purchase_items: o.purchase_items.map(it => it.id === editItem.id ? { ...it, ...payload } : it),
@@ -201,7 +228,7 @@ export default function PurchasesClient({
   };
 
   // ---------------------------------------------------------------------
-  // عناصر النموذج القابلة لإعادة الاستخدام لأي بند (فئة + كمية + باقي الحقول)
+  // عناصر نموذج بند قابلة لإعادة الاستخدام (بدون صورة - الصورة على الأمر)
   // ---------------------------------------------------------------------
   const ItemFields = ({ value, onChange }: { value: ItemForm; onChange: (patch: Partial<ItemForm>) => void }) => (
     <div className="space-y-4">
@@ -224,14 +251,33 @@ export default function PurchasesClient({
             {STATUSES.map(s => <option key={s}>{s}</option>)}
           </select></div>
       </div>
+    </div>
+  );
+
+  // نموذج بيانات أمر الشراء نفسه: أمر الشغل + الصورة
+  const OrderFields = ({ value, onChange, currentImagePath }: {
+    value: OrderForm; onChange: (patch: Partial<OrderForm>) => void; currentImagePath?: string | null;
+  }) => (
+    <div className="space-y-4">
+      <div><label className="eg-label">أمر الشغل</label>
+        <select value={value.wo_id} onChange={e => onChange({ wo_id: e.target.value })} className="eg-select">
+          <option value="">— بدون أمر شغل —</option>
+          {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
+        </select></div>
       <div>
-        <label className="eg-label">صورة إيصال / الصنف (اختياري)</label>
-        <label className="eg-btn-ghost cursor-pointer text-sm inline-flex items-center gap-2">
-          <ImageIcon className="w-4 h-4" />
-          {value.image ? value.image.name : "اختر صورة"}
-          <input type="file" accept="image/*" className="hidden"
-            onChange={e => onChange({ image: e.target.files?.[0] ?? null })} />
-        </label>
+        <label className="eg-label">صورة إيصال / فاتورة أمر الشراء (اختياري)</label>
+        <div className="flex items-center gap-3">
+          <label className="eg-btn-ghost cursor-pointer text-sm inline-flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" />
+            {value.image ? value.image.name : "اختر صورة"}
+            <input type="file" accept="image/*" className="hidden"
+              onChange={e => onChange({ image: e.target.files?.[0] ?? null })} />
+          </label>
+          {currentImagePath && !value.image && (
+            <a href={getImageUrl(currentImagePath) ?? "#"} target="_blank" rel="noopener"
+              className="text-accent text-xs hover:underline">عرض الصورة الحالية</a>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -248,12 +294,20 @@ export default function PurchasesClient({
       <div className="space-y-4">
         {orders.map(order => (
           <details key={order.id} open className="eg-card overflow-hidden group">
-            <summary className="flex items-center justify-between gap-3 p-3 cursor-pointer select-none list-none">
-              <div className="flex items-center gap-3">
+            <summary className="flex items-center justify-between gap-3 p-3 cursor-pointer select-none list-none flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
                 <ChevronDown className="w-4 h-4 text-subtext transition-transform group-open:rotate-180" />
+                <span className="font-mono font-bold text-text">{formatOrderNo(order.order_no)}</span>
                 <span className="font-mono text-accent">{order.work_order?.wo_number ?? "بدون أمر شغل"}</span>
                 <span className="text-subtext text-xs">طلب بتاريخ {order.request_date}</span>
                 <span className="text-subtext text-xs">· {order.purchase_items.length} بند</span>
+                {order.image_path && (
+                  <a href={getImageUrl(order.image_path) ?? "#"} target="_blank" rel="noopener"
+                    onClick={e => e.stopPropagation()}
+                    className="text-accent text-xs hover:underline flex items-center gap-1">
+                    <ImageIcon className="w-3 h-3" />صورة الأمر
+                  </a>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <button onClick={(e) => { e.preventDefault(); openAddItem(order.id); }}
@@ -261,10 +315,14 @@ export default function PurchasesClient({
                   <Plus className="w-3 h-3" />إضافة بند
                 </button>
                 {isAdmin && (
-                  <button onClick={(e) => { e.preventDefault(); removeOrder(order.id); }}
-                    className="text-danger/60 hover:text-danger transition-colors">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <>
+                    <button onClick={(e) => { e.preventDefault(); openEditOrder(order); }}
+                      className="text-accent hover:text-accent2 transition-colors">
+                      <Pencil className="w-4 h-4" /></button>
+                    <button onClick={(e) => { e.preventDefault(); removeOrder(order.id); }}
+                      className="text-danger/60 hover:text-danger transition-colors">
+                      <Trash2 className="w-4 h-4" /></button>
+                  </>
                 )}
               </div>
             </summary>
@@ -273,7 +331,7 @@ export default function PurchasesClient({
               <table className="eg-table">
                 <thead><tr>
                   <th>الصنف</th><th>الكمية</th><th>الفئة</th>
-                  <th>تاريخ التوريد</th><th>الحالة</th><th>صورة</th>
+                  <th>تاريخ التوريد</th><th>الحالة</th>
                   {isAdmin && <th>إجراءات</th>}
                 </tr></thead>
                 <tbody>
@@ -286,14 +344,6 @@ export default function PurchasesClient({
                         {item.supply_date ?? "—"}
                       </td>
                       <td><Badge label={item.status} /></td>
-                      <td>
-                        {item.image_path ? (
-                          <a href={getImageUrl(item.image_path) ?? "#"} target="_blank" rel="noopener"
-                            className="text-accent text-xs hover:underline flex items-center gap-1">
-                            <ImageIcon className="w-3 h-3" />عرض
-                          </a>
-                        ) : <span className="text-subtext text-xs">—</span>}
-                      </td>
                       {isAdmin && (
                         <td>
                           <div className="flex gap-2">
@@ -307,7 +357,7 @@ export default function PurchasesClient({
                     </tr>
                   ))}
                   {order.purchase_items.length === 0 && (
-                    <tr><td colSpan={isAdmin ? 7 : 6} className="text-center text-subtext text-sm py-3">لا توجد بنود بعد</td></tr>
+                    <tr><td colSpan={isAdmin ? 6 : 5} className="text-center text-subtext text-sm py-3">لا توجد بنود بعد</td></tr>
                   )}
                 </tbody>
               </table>
@@ -317,14 +367,10 @@ export default function PurchasesClient({
         {orders.length === 0 && <div className="eg-card"><EmptyState /></div>}
       </div>
 
-      {/* أمر شراء جديد + بنوده */}
+      {/* أمر شراء جديد + صورته + بنوده */}
       <Modal open={addOrderOpen} onClose={() => { setAddOrderOpen(false); resetNewOrder(); }} title="أمر شراء جديد">
         <div className="space-y-5">
-          <div><label className="eg-label">أمر الشغل</label>
-            <select value={newOrderWoId} onChange={e => setNewOrderWoId(e.target.value)} className="eg-select">
-              <option value="">— بدون أمر شغل —</option>
-              {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
-            </select></div>
+          <OrderFields value={newOrder} onChange={patch => setNewOrder(f => ({ ...f, ...patch }))} />
 
           <div className="space-y-4">
             {newOrderItems.map((item, idx) => (
@@ -352,6 +398,15 @@ export default function PurchasesClient({
         </div>
       </Modal>
 
+      {/* تعديل بيانات أمر الشراء (أمر الشغل + الصورة) */}
+      <Modal open={!!editOrder} onClose={() => setEditOrder(null)} title={editOrder ? `تعديل ${formatOrderNo(editOrder.order_no)}` : "تعديل الأمر"}>
+        <OrderFields value={editOrderForm} onChange={patch => setEditOrderForm(f => ({ ...f, ...patch }))}
+          currentImagePath={editOrder?.image_path} />
+        <button onClick={submitEditOrder} disabled={saving} className="eg-btn-success w-full justify-center mt-5">
+          {saving ? "جاري الحفظ..." : "💾 حفظ التعديل"}
+        </button>
+      </Modal>
+
       {/* إضافة بند لأمر شراء موجود */}
       <Modal open={addItemOrderId !== null} onClose={() => setAddItemOrderId(null)} title="إضافة بند">
         <ItemFields value={addItemForm} onChange={patch => setAddItemForm(f => ({ ...f, ...patch }))} />
@@ -362,7 +417,7 @@ export default function PurchasesClient({
 
       {/* تعديل بند */}
       <Modal open={!!editItem} onClose={() => setEditItem(null)} title="تعديل البند">
-        <ItemFields value={editForm} onChange={patch => setEditForm(f => ({ ...f, ...patch }))} />
+        <ItemFields value={editItemForm} onChange={patch => setEditItemForm(f => ({ ...f, ...patch }))} />
         <button onClick={submitEditItem} disabled={saving} className="eg-btn-success w-full justify-center mt-5">
           {saving ? "جاري الحفظ..." : "💾 حفظ التعديل"}
         </button>
