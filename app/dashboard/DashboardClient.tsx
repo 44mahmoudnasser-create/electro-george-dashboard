@@ -13,16 +13,22 @@ const STATUS_ICONS: Record<string,string> = {
 };
 
 export default function DashboardClient({
-  wos, attendance, purchases, violations, expectedDeliveries, today, thisMonth, role
+  wos, attendance, purchases, violations, today, thisMonth, role
 }: {
   wos: WorkOrder[];
   attendance: (Attendance & { technician?: { name:string; route:string } })[];
   purchases: (Purchase & { work_order?: { wo_number:string } })[];
-  violations: (Violation & { technician?: { name:string } })[];
-  expectedDeliveries: WorkOrder[];
+  violations: (Violation & { technician?: { name:string }; date?: string })[];
   today: string; thisMonth: string; role: string;
 }) {
   const [modal, setModal] = useState<{ type:string; data?:unknown[] } | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(thisMonth); // صيغة "YYYY-MM"، المستخدم بيختارها من الـ selector
+
+  const monthLabel = useMemo(() => {
+    const [y, m] = selectedMonth.split("-").map(Number);
+    if (!y || !m) return selectedMonth;
+    return new Date(y, m - 1, 1).toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
+  }, [selectedMonth]);
 
   /* ── KPI calculations ── */
   const totalWOs   = wos.length;
@@ -46,8 +52,18 @@ export default function DashboardClient({
   const totalPur  = purchases.length;
 
   const doneThisMonth = wos.filter(w =>
-    w.completion_date && w.completion_date.startsWith(thisMonth)).length;
+    w.completion_date && w.completion_date.startsWith(selectedMonth)).length;
   const remaining = wos.filter(w => !["مكتمل","تم التسليم"].includes(w.status)).length;
+
+  /* ── الأوامر المطلوب تسليمها في الشهر المختار ── */
+  const expectedDeliveries = useMemo(() =>
+    wos.filter(wo => wo.expected_delivery && wo.expected_delivery.startsWith(selectedMonth)),
+    [wos, selectedMonth]);
+
+  /* ── مخالفات الشهر المختار ── */
+  const monthlyViolations = useMemo(() =>
+    violations.filter(v => v.date && v.date.startsWith(selectedMonth)),
+    [violations, selectedMonth]);
 
   /* ── Monthly Expected Breakdown ── */
   const monthlyStats = useMemo(() => {
@@ -73,7 +89,7 @@ export default function DashboardClient({
   if (stopped > 0) alerts.push({ text:`⛔ ${stopped} أمر شغل متوقف`, color:"text-warning" });
   if (latePur.length > 0) alerts.push({ text:`📦 ${latePur.length} طلب شراء متأخر`, color:"text-warning" });
   if (absentToday.length > 2) alerts.push({ text:`👤 ${absentToday.length} غائبين اليوم`, color:"text-danger" });
-  if (violations.length > 3) alerts.push({ text:`🚫 ${violations.length} مخالفة هذا الشهر`, color:"text-warning" });
+  if (monthlyViolations.length > 3) alerts.push({ text:`🚫 ${monthlyViolations.length} مخالفة في ${monthLabel}`, color:"text-warning" });
   if (alerts.length === 0) alerts.push({ text:"✅ لا توجد تنبيهات حرجة", color:"text-success" });
 
   const open = (type:string, data?:unknown[]) => setModal({ type, data });
@@ -81,9 +97,21 @@ export default function DashboardClient({
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-xl font-bold text-text">لوحة التحكم</h1>
-        <p className="text-sm text-subtext mt-0.5">{today}</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-text">لوحة التحكم</h1>
+          <p className="text-sm text-subtext mt-0.5">{today}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-subtext whitespace-nowrap">عرض بيانات شهر:</label>
+          <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
+            className="eg-input !w-auto" />
+          {selectedMonth !== thisMonth && (
+            <button onClick={() => setSelectedMonth(thisMonth)} className="text-xs text-accent hover:underline whitespace-nowrap">
+              الرجوع للشهر الحالي
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── KPI Row ── */}
@@ -101,8 +129,8 @@ export default function DashboardClient({
       <section className="eg-card">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="font-bold text-text text-lg">📅 المطلوب تسليمه هذا الشهر</h2>
-            <p className="text-xs text-subtext mt-0.5">إجمالي الأوامر المستهدفة للتسليم خلال الشهر الحالي</p>
+            <h2 className="font-bold text-text text-lg">📅 المطلوب تسليمه في {monthLabel}</h2>
+            <p className="text-xs text-subtext mt-0.5">إجمالي الأوامر المستهدفة للتسليم خلال الشهر المختار</p>
           </div>
           <button 
             onClick={() => open("wo-status", expectedDeliveries)}
@@ -158,7 +186,7 @@ export default function DashboardClient({
           <h2 className="font-bold text-text mb-4">📈 متابعة الإنجاز</h2>
           <div className="space-y-3">
             {[
-              { label:"مكتملة هذا الشهر", value:doneThisMonth, color:"text-success", items: wos.filter(w=>w.completion_date?.startsWith(thisMonth)) },
+              { label:`مكتملة في ${monthLabel}`, value:doneThisMonth, color:"text-success", items: wos.filter(w=>w.completion_date?.startsWith(selectedMonth)) },
               { label:"متبقية", value:remaining, color:"text-accent",  items: wos.filter(w=>!["مكتمل","تم التسليم"].includes(w.status)) },
               { label:"متأخرة", value:lateWOs,   color:"text-danger",  items: lateWOList },
             ].map(r => (
@@ -181,12 +209,12 @@ export default function DashboardClient({
               { label:"غائب",    value:absentToday.length, color:"text-danger", filter:"غياب" },
               { label:"مأمورية", value:missionToday, color:"text-accent",  filter:"مأمورية" },
               { label:"إجازة",   value:leaveToday,   color:"text-warning", filter:"أجازة" },
-              { label:"جزاءات الشهر", value:violations.length, color:"text-danger", filter:"" },
+              { label:`جزاءات ${monthLabel}`, value:monthlyViolations.length, color:"text-danger", filter:"" },
             ].map(r => (
               <button key={r.label}
                 onClick={() => open("att-filter", r.filter
                   ? attendance.filter(a=>a.status===r.filter)
-                  : violations)}
+                  : monthlyViolations)}
                 className="flex items-center justify-between w-full bg-card2 rounded-lg px-4 py-3
                            hover:bg-border/30 transition-all group">
                 <span className={`text-xl font-bold ${r.color}`}>{r.value}</span>

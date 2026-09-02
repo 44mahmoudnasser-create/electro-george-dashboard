@@ -23,13 +23,9 @@ export default async function DashboardPage() {
     supabase.from("work_orders").select("*").order("id", { ascending: false }),
     supabase.from("attendance").select("*, technician:technicians(name,route)").eq("date", today),
     supabase.from("purchases").select("*, work_order:work_orders(wo_number)").order("id", { ascending: false }),
-    supabase.from("violations").select("*, technician:technicians(name)").gte("date", thisMonth + "-01"),
+    // من غير فلتر شهر هنا؛ الشهر المطلوب بيتحدد من الواجهة نفسها (Month Selector)
+    supabase.from("violations").select("*, technician:technicians(name)").order("date", { ascending: false }),
   ]);
-
-  // فلترة الأوامر المطلوب تسليمها هذا الشهر (مع استبعاد المستلمة أو حسب رغبتك)
-  const expectedDeliveriesThisMonth = (wos ?? []).filter((wo) => 
-    wo.expected_delivery && wo.expected_delivery.startsWith(thisMonth)
-  );
 
   return (
     <AppShell role={role}>
@@ -38,7 +34,6 @@ export default async function DashboardPage() {
         attendance={attendance ?? []}
         purchases={purchases ?? []}
         violations={violations ?? []}
-        expectedDeliveries={expectedDeliveriesThisMonth}
         today={today}
         thisMonth={thisMonth}
         role={role}
