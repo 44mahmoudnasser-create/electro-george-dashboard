@@ -11,7 +11,7 @@ import { Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown } from "lucide-re
 // ---------------------------------------------------------------------
 // أنواع البيانات: أمر شراء (Header - له رقم تسلسلي وصورة) بداخله بنود
 // ---------------------------------------------------------------------
-const CATEGORIES = ["عدد", "كيلو", "جرام", "علبة"] as const;
+const CATEGORIES = ["عدد", "كيلو", "متر", "علبة"] as const;
 type Category = typeof CATEGORIES[number];
 const STATUSES = ["مفتوح", "تم التوريد", "ملغي"] as const;
 
