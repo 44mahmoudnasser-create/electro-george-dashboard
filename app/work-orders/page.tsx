@@ -11,10 +11,13 @@ export default async function WorkOrdersPage() {
   if (!user) redirect("/login");
   const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
   const role = appUser?.role ?? "secretary";
-  const { data: wos } = await supabase.from("work_orders").select("*").order("id", { ascending: false });
+  const [{ data: wos }, { data: products }] = await Promise.all([
+    supabase.from("work_orders").select("*").order("id", { ascending: false }),
+    supabase.from("standard_products").select("id,name").order("name", { ascending: true }),
+  ]);
   return (
     <AppShell role={role}>
-      <WorkOrdersClient initialWOs={wos ?? []} role={role} />
+      <WorkOrdersClient initialWOs={wos ?? []} products={products ?? []} role={role} />
     </AppShell>
   );
 }

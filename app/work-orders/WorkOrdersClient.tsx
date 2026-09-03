@@ -9,23 +9,31 @@ import EmptyState from "@/components/ui/EmptyState";
 import { Plus, Search, ArrowUpDown } from "lucide-react";
 
 const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
+const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
+const PRIORITY_COLORS: Record<string,string> = {
+  "منخفضة":"text-subtext", "متوسطة":"text-accent", "عالية":"text-warning", "عاجلة":"text-danger",
+};
 
-export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WorkOrder[]; role: string }) {
+export default function WorkOrdersClient({ initialWOs, products, role }: {
+  initialWOs: WorkOrder[]; products: { id:number; name:string }[]; role: string;
+}) {
   const [wos, setWOs] = useState<WorkOrder[]>(initialWOs);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("الكل");
+  const [filterPriority, setFilterPriority] = useState("الكل");
   const [sortCol, setSortCol] = useState<keyof WorkOrder>("id");
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc");
   const [addOpen, setAddOpen] = useState(false);
   const [detailWO, setDetailWO] = useState<WorkOrder|null>(null);
-  const [form, setForm] = useState({ wo_number:"", status:"لم يبدأ", expected_delivery:"" });
+  const [form, setForm] = useState({ wo_number:"", status:"لم يبدأ", expected_delivery:"", priority:"متوسطة", plan_month:"" });
   const [saving, setSaving] = useState(false);
   const todayStr = today();
 
   const sorted = useMemo(() => {
     let list = wos.filter(w =>
       (!search || w.wo_number.includes(search)) &&
-      (filterStatus === "الكل" || w.status === filterStatus)
+      (filterStatus === "الكل" || w.status === filterStatus) &&
+      (filterPriority === "الكل" || (w as any).priority === filterPriority)
     );
     list = [...list].sort((a,b) => {
       const av = String(a[sortCol] ?? ""); const bv = String(b[sortCol] ?? "");
@@ -56,7 +64,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
     if (error) { alert(error.message); return; }
     setWOs(prev => [data, ...prev]);
     setAddOpen(false);
-    setForm({ wo_number:"", status:"لم يبدأ", expected_delivery:"" });
+    setForm({ wo_number:"", status:"لم يبدأ", expected_delivery:"", priority:"متوسطة", plan_month:"" });
   };
 
   const updateWO = async (id:number, patch: Partial<WorkOrder>) => {
@@ -67,9 +75,12 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
     setDetailWO(prev => prev ? { ...prev, ...patch, ...auto } : prev);
   };
 // 1. حالات جديدة لتخزين البيانات والتبويبات
-  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases">("prod");
-  const [relatedData, setRelatedData] = useState({ productivity: [] as any[], files: [] as any[], purchases: [] as any[] });
+  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products">("prod");
+  const [relatedData, setRelatedData] = useState({ productivity: [] as any[], files: [] as any[], purchases: [] as any[], wo_products: [] as any[] });
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [addProductId, setAddProductId] = useState("");
+  const [addProductQty, setAddProductQty] = useState("1");
+  const [savingProduct, setSavingProduct] = useState(false);
 
   // 2. دالة لجلب الصورة
   const getImageUrl = (path: string) => {
@@ -84,19 +95,41 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
     setActiveTab("prod");
     setLoadingDetails(true);
 
-    const [ { data: prod }, { data: files }, { data: pur } ] = await Promise.all([
+    const [ { data: prod }, { data: files }, { data: pur }, { data: woProducts } ] = await Promise.all([
       supabase.from("daily_productivity").select("work_date, task, notes, technicians(name)").eq("wo_id", w.id).order("work_date", { ascending: false }),
       supabase.from("files").select("file_name, file_type, receive_date, delivery_date, technicians(name)").eq("wo_id", w.id),
-      supabase.from("purchases").select("item_name, qty, request_date, supply_date, status, image_path").eq("wo_id", w.id)
+      supabase.from("purchases").select("item_name, qty, request_date, supply_date, status, image_path").eq("wo_id", w.id),
+      supabase.from("work_order_products").select("id, quantity, standard_product:standard_products(id,name)").eq("work_order_id", w.id),
     ]);
 
     setRelatedData({
       productivity: (prod ?? []).map((p: any) => ({ ...p, tech_name: p.technicians?.name })),
       files: (files ?? []).map((f: any) => ({ ...f, supervisor_name: f.technicians?.name })),
-      purchases: pur ?? []
+      purchases: pur ?? [],
+      wo_products: woProducts ?? [],
     });
     
     setLoadingDetails(false);
+  };
+
+  // 4. إضافة/حذف منتج قياسي مربوط بأمر الشغل
+  const addProductToWO = async () => {
+    if (!detailWO || !addProductId) return;
+    setSavingProduct(true);
+    const { data, error } = await supabase.from("work_order_products")
+      .insert({ work_order_id: detailWO.id, standard_product_id: parseInt(addProductId), quantity: parseFloat(addProductQty) || 1 })
+      .select("id, quantity, standard_product:standard_products(id,name)")
+      .single();
+    setSavingProduct(false);
+    if (error) { alert(error.message); return; }
+    setRelatedData(prev => ({ ...prev, wo_products: [...prev.wo_products, data] }));
+    setAddProductId(""); setAddProductQty("1");
+  };
+
+  const removeProductFromWO = async (linkId: number) => {
+    if (!confirm("حذف هذا المنتج من الأوردر؟")) return;
+    await supabase.from("work_order_products").delete().eq("id", linkId);
+    setRelatedData(prev => ({ ...prev, wo_products: prev.wo_products.filter((p:any) => p.id !== linkId) }));
   };
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-7xl mx-auto">
@@ -120,6 +153,10 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           <option>الكل</option>
           {STATUSES.map(s => <option key={s}>{s}</option>)}
         </select>
+        <select value={filterPriority} onChange={e=>setFilterPriority(e.target.value)} className="eg-select w-40">
+          <option>الكل</option>
+          {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+        </select>
       </div>
 
       {/* Table */}
@@ -128,6 +165,8 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           <thead><tr>
             <Th col="wo_number" label="رقم الأمر" />
             <Th col="status" label="الحالة" />
+            <th>الأولوية</th>
+            <th>شهر الخطة</th>
             <Th col="created_date" label="الإنشاء" />
             <Th col="expected_delivery" label="التسليم المتوقع" />
             <Th col="completion_date" label="تاريخ الإتمام" />
@@ -138,6 +177,8 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
           <tr key={w.id} className="cursor-pointer hover:bg-card2 transition-colors" onClick={() => openDetailModal(w)}>
                   <td className="font-mono text-accent font-semibold">{w.wo_number}</td>
                 <td><Badge label={w.status} /></td>
+                <td className={`font-medium ${PRIORITY_COLORS[(w as any).priority] ?? "text-subtext"}`}>{(w as any).priority ?? "—"}</td>
+                <td className="text-subtext">{(w as any).plan_month ?? "—"}</td>
                 <td className="text-subtext">{w.created_date ?? "—"}</td>
                 <td className={
                   w.expected_delivery && w.expected_delivery < todayStr &&
@@ -169,6 +210,16 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
             <input type="date" value={form.expected_delivery}
               onChange={e=>setForm(f=>({...f,expected_delivery:e.target.value}))}
               className="eg-input" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="eg-label">الأولوية</label>
+              <select value={form.priority} onChange={e=>setForm(f=>({...f,priority:e.target.value}))} className="eg-select">
+                {PRIORITIES.map(p=><option key={p}>{p}</option>)}
+              </select></div>
+            <div><label className="eg-label">شهر الخطة</label>
+              <input type="month" value={form.plan_month}
+                onChange={e=>setForm(f=>({...f,plan_month:e.target.value}))}
+                className="eg-input" /></div>
+          </div>
           <button onClick={addWO} disabled={saving} className="eg-btn-primary w-full justify-center">
             {saving ? "جاري الحفظ..." : "💾 حفظ"}
           </button>
@@ -189,6 +240,18 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
               <div><label className="eg-label">التسليم المتوقع</label>
                 <input type="date" value={detailWO.expected_delivery ?? ""}
                   onChange={e => updateWO(detailWO.id, { expected_delivery: e.target.value })}
+                  className="eg-input" disabled={role !== "admin"} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="eg-label">الأولوية</label>
+                <select value={(detailWO as any).priority ?? "متوسطة"}
+                  onChange={e => updateWO(detailWO.id, { priority: e.target.value } as Partial<WorkOrder>)}
+                  className="eg-select" disabled={role !== "admin"}>
+                  {PRIORITIES.map(p=><option key={p}>{p}</option>)}
+                </select></div>
+              <div><label className="eg-label">شهر الخطة</label>
+                <input type="month" value={(detailWO as any).plan_month ?? ""}
+                  onChange={e => updateWO(detailWO.id, { plan_month: e.target.value } as Partial<WorkOrder>)}
                   className="eg-input" disabled={role !== "admin"} /></div>
             </div>
             {/* Info */}
@@ -229,6 +292,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
                     { key: "prod", label: `الإنتاجية (${relatedData.productivity?.length || 0})` },
                     { key: "files", label: `الملفات (${relatedData.files?.length || 0})` },
                     { key: "purchases", label: `المشتريات (${relatedData.purchases?.length || 0})` },
+                    { key: "products", label: `المنتجات (${relatedData.wo_products?.length || 0})` },
                   ].map(({ key, label }) => (
                     <button key={key} type="button"
                       onClick={() => setActiveTab(key as any)}
@@ -300,6 +364,49 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: Wor
                         ))}</tbody>
                       </table>
                     ) : <EmptyState message="لا توجد طلبات شراء" />
+                  )}
+
+                  {/* المنتجات القياسية المربوطة بالأوردر */}
+                  {activeTab === "products" && (
+                    <div className="space-y-4">
+                      {role === "admin" && (
+                        <div className="flex flex-wrap items-end gap-2 bg-card2 rounded-lg p-3">
+                          <div className="flex-1 min-w-[160px]">
+                            <label className="eg-label">المنتج القياسي</label>
+                            <select value={addProductId} onChange={e=>setAddProductId(e.target.value)} className="eg-select">
+                              <option value="">— اختر منتج —</option>
+                              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="w-24">
+                            <label className="eg-label">الكمية</label>
+                            <input type="number" min="0.01" step="any" value={addProductQty}
+                              onChange={e=>setAddProductQty(e.target.value)} className="eg-input" />
+                          </div>
+                          <button onClick={addProductToWO} disabled={savingProduct || !addProductId}
+                            className="eg-btn-primary">
+                            {savingProduct ? "جاري الإضافة..." : "إضافة"}
+                          </button>
+                        </div>
+                      )}
+                      {relatedData.wo_products?.length ? (
+                        <table className="eg-table">
+                          <thead><tr><th>المنتج</th><th>الكمية</th>{role === "admin" && <th>إجراءات</th>}</tr></thead>
+                          <tbody>{relatedData.wo_products.map((wp:any) => (
+                            <tr key={wp.id}>
+                              <td className="text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
+                              <td>{wp.quantity}</td>
+                              {role === "admin" && (
+                                <td>
+                                  <button onClick={() => removeProductFromWO(wp.id)}
+                                    className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
+                                </td>
+                              )}
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      ) : <EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" />}
+                    </div>
                   )}
                 </div>
               </div>
