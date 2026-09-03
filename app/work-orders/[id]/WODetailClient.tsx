@@ -8,25 +8,54 @@ import { ChevronRight, Save } from "lucide-react";
 import { today } from "@/lib/utils";
 
 const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
+const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
 
-export default function WODetailClient({ wo, productivity, files, purchases, role }: {
-  wo: any; productivity: any[]; files: any[]; purchases: any[]; role: string;
+export default function WODetailClient({ wo, productivity, files, purchases, products, initialWoProducts, role }: {
+  wo: any; productivity: any[]; files: any[]; purchases: any[];
+  products: { id:number; name:string }[]; initialWoProducts: any[]; role: string;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState(wo.status);
   const [delivery, setDelivery] = useState(wo.expected_delivery ?? "");
+  const [priority, setPriority] = useState(wo.priority ?? "متوسطة");
+  const [planMonth, setPlanMonth] = useState(wo.plan_month ?? "");
   const [checks, setChecks] = useState({
     chk_client: !!wo.chk_client,
     chk_quality: !!wo.chk_quality,
     chk_assembly: !!wo.chk_assembly,
   });
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases">("prod");
+  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products">("prod");
   const todayStr = today();
+
+  // ---------- المنتجات القياسية المربوطة بالأوردر ----------
+  const [woProducts, setWoProducts] = useState(initialWoProducts);
+  const [addProductId, setAddProductId] = useState("");
+  const [addProductQty, setAddProductQty] = useState("1");
+  const [savingProduct, setSavingProduct] = useState(false);
+
+  const addProduct = async () => {
+    if (!addProductId) return;
+    setSavingProduct(true);
+    const { data, error } = await supabase.from("work_order_products")
+      .insert({ work_order_id: wo.id, standard_product_id: parseInt(addProductId), quantity: parseFloat(addProductQty) || 1 })
+      .select("id, quantity, standard_product:standard_products(id,name)")
+      .single();
+    setSavingProduct(false);
+    if (error) { alert(error.message); return; }
+    setWoProducts(prev => [...prev, data]);
+    setAddProductId(""); setAddProductQty("1");
+  };
+
+  const removeProduct = async (linkId: number) => {
+    if (!confirm("حذف هذا المنتج من الأوردر؟")) return;
+    await supabase.from("work_order_products").delete().eq("id", linkId);
+    setWoProducts(prev => prev.filter((p:any) => p.id !== linkId));
+  };
 
   const save = async () => {
     setSaving(true);
-    const patch: any = { status, expected_delivery: delivery || null, ...checks };
+    const patch: any = { status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks };
     if (status === "مكتمل" && !wo.completion_date) patch.completion_date = todayStr;
     await supabase.from("work_orders").update(patch).eq("id", wo.id);
     setSaving(false);
@@ -48,6 +77,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, rol
     { key: "prod",      label: `الإنتاجية (${productivity.length})` },
     { key: "files",     label: `الملفات (${files.length})` },
     { key: "purchases", label: `المشتريات (${purchases.length})` },
+    { key: "products",  label: `المنتجات (${woProducts.length})` },
   ] as const;
 
   return (
@@ -62,6 +92,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, rol
           <p className="text-sm text-subtext">أُنشئ: {wo.created_date ?? "—"}</p>
         </div>
         <Badge label={wo.status} />
+        <span className="text-xs px-2 py-1 rounded-full bg-card2 text-text font-medium">⏫ {priority}</span>
       </div>
 
       {/* Edit card (admin only) */}
@@ -78,6 +109,16 @@ export default function WODetailClient({ wo, productivity, files, purchases, rol
             <div>
               <label className="eg-label">التسليم المتوقع</label>
               <input type="date" value={delivery} onChange={e => setDelivery(e.target.value)} className="eg-input" />
+            </div>
+            <div>
+              <label className="eg-label">الأولوية</label>
+              <select value={priority} onChange={e => setPriority(e.target.value)} className="eg-select">
+                {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="eg-label">شهر الخطة</label>
+              <input type="month" value={planMonth} onChange={e => setPlanMonth(e.target.value)} className="eg-input" />
             </div>
           </div>
 
@@ -198,6 +239,44 @@ export default function WODetailClient({ wo, productivity, files, purchases, rol
               ))}</tbody>
             </table>
           ) : <EmptyState message="لا توجد طلبات شراء" />
+        )}
+
+        {activeTab === "products" && (
+          <div className="space-y-4">
+            {role === "admin" && (
+              <div className="flex flex-wrap items-end gap-2 bg-card2 rounded-lg p-3">
+                <div className="flex-1 min-w-[160px]">
+                  <label className="eg-label">المنتج القياسي</label>
+                  <select value={addProductId} onChange={e=>setAddProductId(e.target.value)} className="eg-select">
+                    <option value="">— اختر منتج —</option>
+                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div className="w-24">
+                  <label className="eg-label">الكمية</label>
+                  <input type="number" min="0.01" step="any" value={addProductQty}
+                    onChange={e=>setAddProductQty(e.target.value)} className="eg-input" />
+                </div>
+                <button onClick={addProduct} disabled={savingProduct || !addProductId} className="eg-btn-primary">
+                  {savingProduct ? "جاري الإضافة..." : "إضافة"}
+                </button>
+              </div>
+            )}
+            {woProducts.length ? (
+              <table className="eg-table">
+                <thead><tr><th>المنتج</th><th>الكمية</th>{role === "admin" && <th>إجراءات</th>}</tr></thead>
+                <tbody>{woProducts.map((wp:any) => (
+                  <tr key={wp.id}>
+                    <td className="text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
+                    <td>{wp.quantity}</td>
+                    {role === "admin" && (
+                      <td><button onClick={() => removeProduct(wp.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button></td>
+                    )}
+                  </tr>
+                ))}</tbody>
+              </table>
+            ) : <EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" />}
+          </div>
         )}
       </div>
     </div>

@@ -18,6 +18,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: productivity },
     { data: files },
     { data: purchases },
+    { data: products },
+    { data: woProducts },
   ] = await Promise.all([
     supabase.from("work_orders").select("*").eq("id", woId).single(),
     supabase.from("daily_productivity")
@@ -30,6 +32,10 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("purchases")
       .select("item_name, qty, request_date, supply_date, status, image_path")
       .eq("wo_id", woId),
+    supabase.from("standard_products").select("id,name").order("name", { ascending: true }),
+    supabase.from("work_order_products")
+      .select("id, quantity, standard_product:standard_products(id,name)")
+      .eq("work_order_id", woId),
   ]);
 
   if (!wo) notFound();
@@ -41,6 +47,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         productivity={(productivity ?? []).map((p: any) => ({ ...p, tech_name: p.technicians?.name }))}
         files={(files ?? []).map((f: any) => ({ ...f, supervisor_name: f.technicians?.name }))}
         purchases={purchases ?? []}
+        products={products ?? []}
+        initialWoProducts={woProducts ?? []}
         role={role}
       />
     </AppShell>
