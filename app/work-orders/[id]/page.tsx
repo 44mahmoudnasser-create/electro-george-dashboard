@@ -20,6 +20,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: purchases },
     { data: products },
     { data: woProducts },
+    { data: prodItems },
   ] = await Promise.all([
     supabase.from("work_orders").select("*").eq("id", woId).single(),
     supabase.from("daily_productivity")
@@ -36,6 +37,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("work_order_products")
       .select("id, quantity, standard_product:standard_products(id,name)")
       .eq("work_order_id", woId),
+    supabase.from("wo_production_items").select("*").eq("work_order_id", woId).order("id", { ascending: true }),
   ]);
 
   if (!wo) notFound();
@@ -49,6 +51,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         purchases={purchases ?? []}
         products={products ?? []}
         initialWoProducts={woProducts ?? []}
+        initialProdItems={prodItems ?? []}
         role={role}
       />
     </AppShell>
