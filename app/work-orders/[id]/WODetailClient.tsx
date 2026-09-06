@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
+import type { ClipboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Badge from "@/components/ui/Badge";
+import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
 import { ChevronRight, Save } from "lucide-react";
 import { today } from "@/lib/utils";
@@ -10,9 +12,9 @@ import { today } from "@/lib/utils";
 const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
 const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
 
-export default function WODetailClient({ wo, productivity, files, purchases, products, initialWoProducts, role }: {
+export default function WODetailClient({ wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, role }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  products: { id:number; name:string }[]; initialWoProducts: any[]; role: string;
+  products: { id:number; name:string }[]; initialWoProducts: any[]; initialProdItems: any[]; role: string;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState(wo.status);
@@ -25,7 +27,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     chk_assembly: !!wo.chk_assembly,
   });
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products">("prod");
+  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist">("prod");
   const todayStr = today();
 
   // ---------- المنتجات القياسية المربوطة بالأوردر ----------
@@ -53,6 +55,92 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     setWoProducts(prev => prev.filter((p:any) => p.id !== linkId));
   };
 
+  // ---------- قائمة إنتاج الأمر (Qty / Description / Part No. / Sheet Steel / Thickness) ----------
+  const PROD_COLS = ["qty","description","part_no","sheet_steel","thickness"] as const;
+  type DraftRow = { qty:string; description:string; part_no:string; sheet_steel:string; thickness:string };
+  const emptyDraftRow = (): DraftRow => ({ qty:"1", description:"", part_no:"", sheet_steel:"", thickness:"" });
+  const [prodItems, setProdItems] = useState(initialProdItems);
+  const [draftRows, setDraftRows] = useState<DraftRow[]>([emptyDraftRow()]);
+  const [savingProdList, setSavingProdList] = useState(false);
+  const [editProdItem, setEditProdItem] = useState<any>(null);
+  const [editProdForm, setEditProdForm] = useState<DraftRow>(emptyDraftRow());
+
+  const handleGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("\t") && !text.includes("\n")) return;
+    e.preventDefault();
+    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+    setDraftRows(prev => {
+      const updated = [...prev];
+      lines.forEach((line, i) => {
+        const cells = line.split("\t");
+        const targetIdx = rowIdx + i;
+        while (updated.length <= targetIdx) updated.push(emptyDraftRow());
+        const row = { ...updated[targetIdx] };
+        cells.forEach((val, j) => {
+          const col = PROD_COLS[colIdx + j];
+          if (col) (row as any)[col] = val.trim();
+        });
+        updated[targetIdx] = row;
+      });
+      return updated;
+    });
+  };
+
+  const updateDraftRow = (idx: number, patch: Partial<DraftRow>) =>
+    setDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
+  const addDraftRow = () => setDraftRows(prev => [...prev, emptyDraftRow()]);
+  const removeDraftRow = (idx: number) => setDraftRows(prev => prev.length > 1 ? prev.filter((_,i) => i !== idx) : [emptyDraftRow()]);
+
+  const saveProdList = async () => {
+    const rowsToInsert = draftRows
+      .filter(r => r.description.trim())
+      .map(r => ({
+        work_order_id: wo.id,
+        qty: parseFloat(r.qty) || 1,
+        description: r.description.trim(),
+        part_no: r.part_no.trim() || null,
+        sheet_steel: r.sheet_steel.trim() || null,
+        thickness: r.thickness.trim() || null,
+      }));
+    if (rowsToInsert.length === 0) return;
+    setSavingProdList(true);
+    const { data, error } = await supabase.from("wo_production_items").insert(rowsToInsert).select("*");
+    setSavingProdList(false);
+    if (error) { alert(error.message); return; }
+    setProdItems(prev => [...prev, ...(data ?? [])]);
+    setDraftRows([emptyDraftRow()]);
+  };
+
+  const openEditProdItem = (item: any) => {
+    setEditProdItem(item);
+    setEditProdForm({
+      qty: String(item.qty), description: item.description,
+      part_no: item.part_no ?? "", sheet_steel: item.sheet_steel ?? "", thickness: item.thickness ?? "",
+    });
+  };
+
+  const submitEditProdItem = async () => {
+    if (!editProdItem) return;
+    const payload = {
+      qty: parseFloat(editProdForm.qty) || 1,
+      description: editProdForm.description.trim(),
+      part_no: editProdForm.part_no.trim() || null,
+      sheet_steel: editProdForm.sheet_steel.trim() || null,
+      thickness: editProdForm.thickness.trim() || null,
+    };
+    const { error } = await supabase.from("wo_production_items").update(payload).eq("id", editProdItem.id);
+    if (error) { alert(error.message); return; }
+    setProdItems(prev => prev.map((it:any) => it.id === editProdItem.id ? { ...it, ...payload } : it));
+    setEditProdItem(null);
+  };
+
+  const removeProdItem = async (itemId: number) => {
+    if (!confirm("حذف هذا الصف من قائمة الإنتاج؟")) return;
+    await supabase.from("wo_production_items").delete().eq("id", itemId);
+    setProdItems(prev => prev.filter((it:any) => it.id !== itemId));
+  };
+
   const save = async () => {
     setSaving(true);
     const patch: any = { status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks };
@@ -78,6 +166,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     { key: "files",     label: `الملفات (${files.length})` },
     { key: "purchases", label: `المشتريات (${purchases.length})` },
     { key: "products",  label: `المنتجات (${woProducts.length})` },
+    { key: "prodlist",  label: `قائمة الإنتاج (${prodItems.length})` },
   ] as const;
 
   return (
@@ -278,7 +367,101 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
             ) : <EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" />}
           </div>
         )}
+
+        {activeTab === "prodlist" && (
+          <div className="space-y-5">
+            {prodItems.length > 0 && (
+              <table className="eg-table">
+                <thead><tr>
+                  <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
+                  {role === "admin" && <th>إجراءات</th>}
+                </tr></thead>
+                <tbody>{prodItems.map((it:any) => (
+                  <tr key={it.id}>
+                    <td>{it.qty}</td>
+                    <td className="text-text">{it.description}</td>
+                    <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
+                    <td>{it.sheet_steel ?? "—"}</td>
+                    <td>{it.thickness ?? "—"}</td>
+                    {role === "admin" && (
+                      <td>
+                        <div className="flex gap-2">
+                          <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
+                          <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+
+            {role === "admin" && (
+              <div className="space-y-2">
+                <p className="text-xs text-subtext">
+                  الصق البنود مباشرة من إكسل (Qty, Description, Part No., Sheet Steel, Thickness) في أي خانة، أو اكتبها يدويًا.
+                </p>
+                <div className="overflow-x-auto border border-border rounded-lg">
+                  <table className="eg-table">
+                    <thead><tr>
+                      <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {draftRows.map((row, rIdx) => (
+                        <tr key={rIdx}>
+                          {PROD_COLS.map((col, cIdx) => (
+                            <td key={col}>
+                              <input value={(row as any)[col]}
+                                onChange={e => updateDraftRow(rIdx, { [col]: e.target.value } as Partial<DraftRow>)}
+                                onPaste={e => handleGridPaste(e, rIdx, cIdx)}
+                                className="eg-input !py-1 !text-sm" />
+                            </td>
+                          ))}
+                          <td>
+                            <button onClick={() => removeDraftRow(rIdx)} className="text-danger/60 hover:text-danger text-xs">✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={addDraftRow} className="eg-btn-ghost text-xs">+ صف يدوي</button>
+                  <button onClick={saveProdList} disabled={savingProdList} className="eg-btn-primary text-sm">
+                    {savingProdList ? "جاري الحفظ..." : "💾 حفظ البنود"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* تعديل صف من قائمة إنتاج الأمر */}
+      <Modal open={!!editProdItem} onClose={() => setEditProdItem(null)} title="تعديل صف قائمة الإنتاج">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="eg-label">Qty</label>
+              <input type="number" min="0.01" step="any" value={editProdForm.qty}
+                onChange={e=>setEditProdForm(f=>({...f,qty:e.target.value}))} className="eg-input" /></div>
+            <div><label className="eg-label">Part No.</label>
+              <input value={editProdForm.part_no}
+                onChange={e=>setEditProdForm(f=>({...f,part_no:e.target.value}))} className="eg-input" /></div>
+          </div>
+          <div><label className="eg-label">Description</label>
+            <input value={editProdForm.description}
+              onChange={e=>setEditProdForm(f=>({...f,description:e.target.value}))} className="eg-input" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="eg-label">Sheet Steel</label>
+              <input value={editProdForm.sheet_steel}
+                onChange={e=>setEditProdForm(f=>({...f,sheet_steel:e.target.value}))} className="eg-input" /></div>
+            <div><label className="eg-label">Thickness</label>
+              <input value={editProdForm.thickness}
+                onChange={e=>setEditProdForm(f=>({...f,thickness:e.target.value}))} className="eg-input" /></div>
+          </div>
+        </div>
+        <button onClick={submitEditProdItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
+      </Modal>
     </div>
   );
 }
