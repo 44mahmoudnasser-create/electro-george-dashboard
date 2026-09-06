@@ -65,6 +65,21 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
   const [editProdItem, setEditProdItem] = useState<any>(null);
   const [editProdForm, setEditProdForm] = useState<DraftRow>(emptyDraftRow());
 
+  const PROD_CHECKS = [
+    { key: "chk_sheet",    label: "الصاج" },
+    { key: "chk_paint",    label: "الدهان" },
+    { key: "chk_assembly", label: "التجميع" },
+  ] as const;
+
+  const toggleProdCheck = async (itemId: number, key: string, value: boolean) => {
+    setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: value } : it)); // تحديث فوري بالواجهة
+    const { error } = await supabase.from("wo_production_items").update({ [key]: value }).eq("id", itemId);
+    if (error) {
+      alert(error.message);
+      setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: !value } : it)); // رجوع لو فشل
+    }
+  };
+
   const handleGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
     if (!text.includes("\t") && !text.includes("\n")) return;
@@ -374,6 +389,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
               <table className="eg-table">
                 <thead><tr>
                   <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
+                  {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
                   {role === "admin" && <th>إجراءات</th>}
                 </tr></thead>
                 <tbody>{prodItems.map((it:any) => (
@@ -383,6 +399,13 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
                     <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                     <td>{it.sheet_steel ?? "—"}</td>
                     <td>{it.thickness ?? "—"}</td>
+                    {PROD_CHECKS.map(c => (
+                      <td key={c.key} className="text-center">
+                        <input type="checkbox" checked={!!it[c.key]}
+                          onChange={e => toggleProdCheck(it.id, c.key, e.target.checked)}
+                          className="w-5 h-5 accent-emerald-500 cursor-pointer" />
+                      </td>
+                    ))}
                     {role === "admin" && (
                       <td>
                         <div className="flex gap-2">
