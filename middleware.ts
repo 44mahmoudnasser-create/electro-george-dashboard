@@ -1,6 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+const RESTRICTED_ROLES = ["sheet_worker", "paint_worker"];
+const RESTRICTED_HOME = "/production";
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
@@ -25,7 +28,24 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   
   if (!user && pathname !== "/login") return NextResponse.redirect(new URL("/login", request.url));
-  if (user && pathname === "/login") return NextResponse.redirect(new URL("/dashboard", request.url));
+
+  if (user) {
+    // فني الصاج/الدهان: نجيب الدور بتاعه ونقفل عليه شاشة /production بس
+    const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
+    const role = appUser?.role;
+    const isRestricted = !!role && RESTRICTED_ROLES.includes(role);
+
+    if (isRestricted && !pathname.startsWith(RESTRICTED_HOME)) {
+      return NextResponse.redirect(new URL(RESTRICTED_HOME, request.url));
+    }
+    if (!isRestricted && pathname === "/login") {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+    if (!isRestricted && pathname.startsWith(RESTRICTED_HOME)) {
+      // اختياري: منع باقي الأدوار من دخول شاشة العمال المقيدين
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+  }
   
   return response;
 }
