@@ -175,7 +175,6 @@ export default function ProductionOnlyClient({ wos, role }: {
                   ))}</tbody>
                 </table>
               </div>
-              </div>
             ) : <EmptyState message="لا توجد بنود في قائمة الإنتاج لهذا الأمر" />}
           </>
         )}
