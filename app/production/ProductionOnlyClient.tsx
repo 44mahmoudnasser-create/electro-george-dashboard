@@ -1,9 +1,9 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import EmptyState from "@/components/ui/EmptyState";
-import { ChevronRight, LogOut, Search } from "lucide-react";
+import { ChevronRight, LogOut, Search, ArrowUpDown } from "lucide-react";
 
 type Role = "sheet_worker" | "paint_worker";
 
@@ -57,6 +57,34 @@ export default function ProductionOnlyClient({ wos, role }: {
 
   const filteredWOs = wos.filter(w => !search || w.wo_number.includes(search));
 
+  // ---------- ترتيب قائمة الإنتاج بأي عمود (زي Sheet Steel كنوع/فئة الخامة) ----------
+  const SORT_COLS = [
+    { key: "qty", label: "Qty" },
+    { key: "description", label: "Description" },
+    { key: "part_no", label: "Part No." },
+    { key: "sheet_steel", label: "Sheet Steel" },
+    { key: "thickness", label: "Thickness" },
+  ] as const;
+  const [sortCol, setSortCol] = useState<string>("id");
+  const [sortDir, setSortDir] = useState<"asc"|"desc">("asc");
+
+  const toggleSort = (col: string) => {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      if (sortCol === "qty") {
+        const diff = (a.qty ?? 0) - (b.qty ?? 0);
+        return sortDir === "asc" ? diff : -diff;
+      }
+      const av = String(a[sortCol] ?? "");
+      const bv = String(b[sortCol] ?? "");
+      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+  }, [items, sortCol, sortDir]);
+
   return (
     <div className="min-h-screen bg-bg">
       {/* Header بسيط - من غير أي Nav */}
@@ -99,10 +127,16 @@ export default function ProductionOnlyClient({ wos, role }: {
               <div className="eg-card overflow-x-auto">
                 <table className="eg-table">
                   <thead><tr>
-                    <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
+                    {SORT_COLS.map(c => (
+                      <th key={c.key} className="cursor-pointer select-none" onClick={() => toggleSort(c.key)}>
+                        <div className="flex items-center gap-1 justify-center">
+                          {c.label}<ArrowUpDown className="w-3 h-3 opacity-50" />
+                        </div>
+                      </th>
+                    ))}
                     {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
                   </tr></thead>
-                  <tbody>{items.map(it => (
+                  <tbody>{sortedItems.map(it => (
                     <tr key={it.id}>
                       <td>{it.qty}</td>
                       <td className="text-text">{it.description}</td>
@@ -111,12 +145,19 @@ export default function ProductionOnlyClient({ wos, role }: {
                       <td>{it.thickness ?? "—"}</td>
                       {PROD_CHECKS.map(c => {
                         const editable = c.key === editableKey;
+                        const value = !!it[c.key];
                         return (
                           <td key={c.key} className="text-center">
-                            <input type="checkbox" checked={!!it[c.key]}
-                              disabled={!editable}
-                              onChange={e => editable && toggleCheck(it.id, c.key, e.target.checked)}
-                              className={`w-5 h-5 accent-emerald-500 ${editable ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`} />
+                            {editable ? (
+                              <input type="checkbox" checked={value}
+                                onChange={e => toggleCheck(it.id, c.key, e.target.checked)}
+                                className="w-5 h-5 accent-emerald-500 cursor-pointer" />
+                            ) : (
+                              <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full whitespace-nowrap ${
+                                value ? "bg-success/15 text-success" : "bg-card2 text-subtext"}`}>
+                                {value ? "✅ تم" : "⬜ لسه"}
+                              </span>
+                            )}
                           </td>
                         );
                       })}
