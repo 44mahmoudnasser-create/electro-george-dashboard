@@ -7,17 +7,22 @@ import { ChevronRight, LogOut, Search } from "lucide-react";
 
 type Role = "sheet_worker" | "paint_worker";
 
-// كل دور بيشتغل على تشيك واحد بس، وده بيتحكم في اللي بيتعرض واللي بيتقدر يتعدل
-const ROLE_CONFIG: Record<Role, { key: "chk_sheet" | "chk_paint"; label: string }> = {
-  sheet_worker: { key: "chk_sheet", label: "الصاج" },
-  paint_worker: { key: "chk_paint", label: "الدهان" },
+// كل دور بيقدر يعدل تشيك واحد بس، لكن بيشوف التلاتة
+const ROLE_EDITABLE_KEY: Record<Role, "chk_sheet" | "chk_paint"> = {
+  sheet_worker: "chk_sheet",
+  paint_worker: "chk_paint",
 };
+const PROD_CHECKS = [
+  { key: "chk_sheet",    label: "الصاج" },
+  { key: "chk_paint",    label: "الدهان" },
+  { key: "chk_assembly", label: "التجميع" },
+] as const;
 
 export default function ProductionOnlyClient({ wos, role }: {
   wos: { id: number; wo_number: string }[]; role: Role;
 }) {
   const router = useRouter();
-  const { key: checkKey, label: checkLabel } = ROLE_CONFIG[role];
+  const editableKey = ROLE_EDITABLE_KEY[role];
   const [search, setSearch] = useState("");
   const [selectedWO, setSelectedWO] = useState<{ id: number; wo_number: string } | null>(null);
   const [items, setItems] = useState<any[]>([]);
@@ -31,22 +36,22 @@ export default function ProductionOnlyClient({ wos, role }: {
   const openWO = async (wo: { id: number; wo_number: string }) => {
     setSelectedWO(wo);
     setLoading(true);
-    // بنجيب Qty/Description/Part No./Sheet Steel/Thickness + التشيك الخاص بيه بس
+    // بنجيب Qty/Description/Part No./Sheet Steel/Thickness + التلات تشيك كلهم (يشوفهم كلهم، يعدل بتاعه بس)
     const { data } = await supabase
       .from("wo_production_items")
-      .select(`id, qty, description, part_no, sheet_steel, thickness, ${checkKey}`)
+      .select("id, qty, description, part_no, sheet_steel, thickness, chk_sheet, chk_paint, chk_assembly")
       .eq("work_order_id", wo.id)
       .order("id", { ascending: true });
     setItems(data ?? []);
     setLoading(false);
   };
 
-  const toggleCheck = async (itemId: number, value: boolean) => {
-    setItems(prev => prev.map(it => it.id === itemId ? { ...it, [checkKey]: value } : it)); // تحديث فوري
-    const { error } = await supabase.from("wo_production_items").update({ [checkKey]: value }).eq("id", itemId);
+  const toggleCheck = async (itemId: number, key: string, value: boolean) => {
+    setItems(prev => prev.map(it => it.id === itemId ? { ...it, [key]: value } : it)); // تحديث فوري
+    const { error } = await supabase.from("wo_production_items").update({ [key]: value }).eq("id", itemId);
     if (error) {
       alert(error.message);
-      setItems(prev => prev.map(it => it.id === itemId ? { ...it, [checkKey]: !value } : it)); // رجوع لو فشل
+      setItems(prev => prev.map(it => it.id === itemId ? { ...it, [key]: !value } : it)); // رجوع لو فشل
     }
   };
 
@@ -56,7 +61,7 @@ export default function ProductionOnlyClient({ wos, role }: {
     <div className="min-h-screen bg-bg">
       {/* Header بسيط - من غير أي Nav */}
       <div className="flex items-center justify-between p-4 border-b border-border bg-card">
-        <h1 className="font-bold text-text">🏭 قائمة الإنتاج — {checkLabel}</h1>
+        <h1 className="font-bold text-text">🏭 قائمة الإنتاج</h1>
         <button onClick={logout} className="eg-btn-ghost text-sm">
           <LogOut className="w-4 h-4" />خروج
         </button>
@@ -94,7 +99,8 @@ export default function ProductionOnlyClient({ wos, role }: {
               <div className="eg-card overflow-x-auto">
                 <table className="eg-table">
                   <thead><tr>
-                    <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th><th>{checkLabel}</th>
+                    <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
+                    {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
                   </tr></thead>
                   <tbody>{items.map(it => (
                     <tr key={it.id}>
@@ -103,11 +109,17 @@ export default function ProductionOnlyClient({ wos, role }: {
                       <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                       <td>{it.sheet_steel ?? "—"}</td>
                       <td>{it.thickness ?? "—"}</td>
-                      <td className="text-center">
-                        <input type="checkbox" checked={!!it[checkKey]}
-                          onChange={e => toggleCheck(it.id, e.target.checked)}
-                          className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                      </td>
+                      {PROD_CHECKS.map(c => {
+                        const editable = c.key === editableKey;
+                        return (
+                          <td key={c.key} className="text-center">
+                            <input type="checkbox" checked={!!it[c.key]}
+                              disabled={!editable}
+                              onChange={e => editable && toggleCheck(it.id, c.key, e.target.checked)}
+                              className={`w-5 h-5 accent-emerald-500 ${editable ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`} />
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}</tbody>
                 </table>
