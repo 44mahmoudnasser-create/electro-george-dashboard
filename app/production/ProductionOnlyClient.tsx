@@ -79,6 +79,10 @@ export default function ProductionOnlyClient({ wos, role }: {
         const diff = (a.qty ?? 0) - (b.qty ?? 0);
         return sortDir === "asc" ? diff : -diff;
       }
+      if (sortCol === "chk_sheet" || sortCol === "chk_paint" || sortCol === "chk_assembly") {
+        const diff = Number(!!a[sortCol]) - Number(!!b[sortCol]);
+        return sortDir === "asc" ? diff : -diff;
+      }
       const av = String(a[sortCol] ?? "");
       const bv = String(b[sortCol] ?? "");
       return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
@@ -95,7 +99,7 @@ export default function ProductionOnlyClient({ wos, role }: {
         </button>
       </div>
 
-      <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-4">
+      <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-4">
         {!selectedWO ? (
           <>
             <div className="relative">
@@ -125,24 +129,30 @@ export default function ProductionOnlyClient({ wos, role }: {
               <div className="text-center py-8 text-subtext text-sm">جاري التحميل...</div>
             ) : items.length ? (
               <div className="eg-card overflow-x-auto">
-                <table className="eg-table">
+                <table className="eg-table w-full min-w-[820px]">
                   <thead><tr>
                     {SORT_COLS.map(c => (
-                      <th key={c.key} className="cursor-pointer select-none" onClick={() => toggleSort(c.key)}>
+                      <th key={c.key} className="cursor-pointer select-none whitespace-nowrap" onClick={() => toggleSort(c.key)}>
                         <div className="flex items-center gap-1 justify-center">
                           {c.label}<ArrowUpDown className="w-3 h-3 opacity-50" />
                         </div>
                       </th>
                     ))}
-                    {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
+                    {PROD_CHECKS.map(c => (
+                      <th key={c.key} className="cursor-pointer select-none whitespace-nowrap" onClick={() => toggleSort(c.key)}>
+                        <div className="flex items-center gap-1 justify-center">
+                          {c.label}<ArrowUpDown className="w-3 h-3 opacity-50" />
+                        </div>
+                      </th>
+                    ))}
                   </tr></thead>
                   <tbody>{sortedItems.map(it => (
                     <tr key={it.id}>
-                      <td>{it.qty}</td>
+                      <td className="whitespace-nowrap">{it.qty}</td>
                       <td className="text-text">{it.description}</td>
-                      <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
-                      <td>{it.sheet_steel ?? "—"}</td>
-                      <td>{it.thickness ?? "—"}</td>
+                      <td className="font-mono text-accent whitespace-nowrap">{it.part_no ?? "—"}</td>
+                      <td className="whitespace-nowrap">{it.sheet_steel ?? "—"}</td>
+                      <td className="whitespace-nowrap">{it.thickness ?? "—"}</td>
                       {PROD_CHECKS.map(c => {
                         const editable = c.key === editableKey;
                         const value = !!it[c.key];
@@ -164,6 +174,7 @@ export default function ProductionOnlyClient({ wos, role }: {
                     </tr>
                   ))}</tbody>
                 </table>
+              </div>
               </div>
             ) : <EmptyState message="لا توجد بنود في قائمة الإنتاج لهذا الأمر" />}
           </>
