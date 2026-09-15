@@ -4,7 +4,7 @@ import Sidebar from "./Sidebar";
 import BottomNav from "./BottomNav";
 import { supabase } from "@/lib/supabase";
 import EnableNotificationsButton from "@/components/layout/EnableNotificationsButton";
-import EnableNotificationsButton from "@/components/layout/EnableNotificationsButton";
+
 export default function AppShell({
   children, role: initialRole
 }: { children: React.ReactNode; role: string }) {
