@@ -12,8 +12,8 @@ const PERM_OPTS = ["—","إذن ساعتين صباحي","إذن ساعتين �
 type AttRow = { tech_id:number; status:string; permission:string; overtime:boolean };
 
 export default function AttendanceClient({
-  initialTechnicians, role
-}: { initialTechnicians: Technician[]; role: string }) {
+  initialTechnicians, role, department
+}: { initialTechnicians: Technician[]; role: string; department: string | null }) {
   const [date, setDate] = useState(today());
   const [rows, setRows] = useState<AttRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,10 +22,19 @@ export default function AttendanceClient({
 
   const load = async () => {
     setLoading(true);
+    const techIds = initialTechnicians.map(t => t.id);
+
+    if (techIds.length === 0) {
+      setRows([]);
+      setHistory([]);
+      setLoading(false);
+      return;
+    }
+
     const [att, perm, ot] = await Promise.all([
-      supabase.from("attendance").select("tech_id,status").eq("date", date),
-      supabase.from("permissions").select("tech_id,permission_type").eq("date", date),
-      supabase.from("overtime").select("tech_id,has_overtime").eq("date", date),
+      supabase.from("attendance").select("tech_id,status").eq("date", date).in("tech_id", techIds),
+      supabase.from("permissions").select("tech_id,permission_type").eq("date", date).in("tech_id", techIds),
+      supabase.from("overtime").select("tech_id,has_overtime").eq("date", date).in("tech_id", techIds),
     ]);
     const attMap = Object.fromEntries((att.data ?? []).map(r => [r.tech_id, r.status]));
     const permMap = Object.fromEntries((perm.data ?? []).map(r => [r.tech_id, r.permission_type]));
@@ -36,10 +45,12 @@ export default function AttendanceClient({
       permission: permMap[t.id] ?? "—",
       overtime: otMap[t.id] ?? false,
     })));
-    // History
+
+    // History — بس فنيين نفس القسم
     const { data: hist } = await supabase
       .from("attendance")
-      .select("tech_id, date, status, technicians(name)")
+      .select("tech_id, date, status, technicians!inner(name, department)")
+      .eq("technicians.department", department)
       .order("date", { ascending: false })
       .limit(50);
     setHistory((hist ?? []).map((r:any) => ({ name: r.technicians?.name, date: r.date, status: r.status })));
