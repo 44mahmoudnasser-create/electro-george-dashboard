@@ -78,6 +78,16 @@ export default function AttendanceClient({
         .upsert({ tech_id: r.tech_id, date, has_overtime: r.overtime }, { onConflict: "tech_id,date" });
     }
     setSaving(false);
+    // إرسال إشعار للمدير/الأدمن
+  fetch("/api/push/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "📅 تسجيل حضور جديد",
+      body: `تم تسجيل الحضور بتاريخ ${date}`,
+      url: "/attendance",
+    }),
+  }).catch(() => {}); // لو فشل الإرسال، متوقفش عملية الحفظv
     alert("✅ تم الحفظ بنجاح");
   };
 
