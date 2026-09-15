@@ -10,6 +10,14 @@ export default async function TechniciansPage() {
   const { user, role } = await getUserRole();
   if (!user) redirect("/login");
 
+  const { data: appUser } = await supabase
+    .from("app_users")
+    .select("department")
+    .eq("id", user.id)
+    .single();
+
+  const department = appUser?.department ?? null;
+
   const [{ data: technicians }, { data: skills }] = await Promise.all([
     supabase.from("technicians").select(`
       *,
@@ -24,6 +32,7 @@ export default async function TechniciansPage() {
         initialTechnicians={technicians ?? []}
         allSkills={skills ?? []}
         role={role}
+        department={department}
       />
     </AppShell>
   );
