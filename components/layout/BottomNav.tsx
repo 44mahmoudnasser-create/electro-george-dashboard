@@ -5,11 +5,15 @@ import { cn } from "@/lib/utils";
 import { LayoutDashboard, ClipboardList, CalendarCheck, ShoppingCart, Users } from "lucide-react";
 
 const MOBILE_NAV = [
-  { href: "/dashboard",   icon: LayoutDashboard, label: "الرئيسية" },
-  { href: "/work-orders", icon: ClipboardList,   label: "أوامر" },
-  { href: "/attendance",  icon: CalendarCheck,   label: "الحضور" },
-  { href: "/purchases",   icon: ShoppingCart,    label: "مشتريات" },
-  { href: "/technicians", icon: Users,           label: "الفنيين" },
+  { href: "/dashboard",   icon: LayoutDashboard, label: "لوحة التحكم" },
+  { href: "/technicians", icon: Users,            label: "الفنيين" },
+  { href: "/skills",      icon: Wrench,           label: "المهارات" },
+  { href: "/work-orders", icon: ClipboardList,    label: "أوامر الشغل" },
+  { href: "/files",       icon: FolderOpen,       label: "الملفات" },
+  { href: "/violations",  icon: AlertTriangle,    label: "المخالفات" },
+  { href: "/purchases",   icon: ShoppingCart,     label: "طلبات الشراء" },
+  { href: "/attendance",  icon: CalendarCheck,    label: "الحضور" },
+  { href: "/productivity",icon: BarChart3,         label: "الإنتاجية" },
 ];
 
 export default function BottomNav() {
