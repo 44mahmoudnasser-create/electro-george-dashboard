@@ -9,10 +9,12 @@ export default function AppShell({
   children, role: initialRole
 }: { children: React.ReactNode; role: string }) {
   const [role, setRole] = useState(initialRole);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
+      setUserId(user.id);
       // Read from metadata first (most reliable)
       const metaRole = user.user_metadata?.role as string | undefined;
       if (metaRole) { setRole(metaRole); return; }
@@ -25,16 +27,18 @@ export default function AppShell({
     });
   }, []);
 
-
-
   return (
     <div className="flex min-h-screen">
       <Sidebar role={role} />
       <main className="flex-1 overflow-auto pb-20 md:pb-0">
+        {userId && (
+          <div className="flex justify-end p-3">
+            <EnableNotificationsButton userId={userId} role={role} />
+          </div>
+        )}
         {children}
       </main>
       <BottomNav />
     </div>
   );
-
 }
