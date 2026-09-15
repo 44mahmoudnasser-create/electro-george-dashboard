@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.vercel.electro_george_dashboard.twa",
+        "sha256_cert_fingerprints": ["E3:C4:45:D0:CE:42:D7:49:D5:62:11:AB:41:1D:B9:EB:5C:97:CC:A3:28:3B:3B:18:F5:3C:FA:93:1F:ED:72:7F"]
+      }
+    }]
