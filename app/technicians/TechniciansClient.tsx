@@ -16,11 +16,12 @@ type Skill = { id: number; skill_name: string };
 const GRADES = ["فني", "مشرف", "مساعد"] as const;
 
 export default function TechniciansClient({
-  initialTechnicians, allSkills, role,
+  initialTechnicians, allSkills, role, department,
 }: {
   initialTechnicians: TechRow[];
   allSkills: Skill[];
   role: string;
+  department: string | null;
 }) {
   const router = useRouter();
   const [techs, setTechs] = useState<TechRow[]>(initialTechnicians);
@@ -55,7 +56,12 @@ export default function TechniciansClient({
     setSaving(true);
     const { data, error } = await supabase
       .from("technicians")
-      .insert({ name: form.name, grade: form.grade, route: form.route })
+      .insert({
+        name: form.name,
+        grade: form.grade,
+        route: form.route,
+        department, // بياخد قسم اليوزر تلقائي، مش قيمة من الفورم
+      })
       .select()
       .single();
     if (error) { alert(error.message); setSaving(false); return; }
