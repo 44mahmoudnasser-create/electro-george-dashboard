@@ -4,8 +4,6 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Electro George — نظام قسم التجميع",
   description: "نظام متابعة قسم التجميع الميكانيكي",
-};
-export const metadata = {
   manifest: "/manifest.json",
   themeColor: "#000000",
 };
