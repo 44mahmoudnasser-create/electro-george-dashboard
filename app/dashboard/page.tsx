@@ -11,8 +11,36 @@ export default async function DashboardPage() {
   const { user, role } = await getUserRole();
   if (!user) redirect("/login");
 
+  // department بتتجاب من app_users مباشرة (getUserRole عندك مش راجعة department حاليًا)
+  const { data: appUser } = await supabase
+    .from("app_users")
+    .select("department")
+    .eq("id", user.id)
+    .single();
+
+  const department = appUser?.department ?? null;
+  const isManager = role === "manager";
+
   const today = new Date().toISOString().split("T")[0];
-  const thisMonth = today.slice(0, 7); // صيغة "YYYY-MM"
+  const thisMonth = today.slice(0, 7);
+
+  // attendance query — مفلترة بالقسم لو مش manager
+  let attendanceQuery = supabase
+    .from("attendance")
+    .select("*, technician:technicians!inner(name,route,department)")
+    .eq("date", today);
+  if (!isManager) {
+    attendanceQuery = attendanceQuery.eq("technician.department", department);
+  }
+
+  // violations query — مفلترة بالقسم لو مش manager
+  let violationsQuery = supabase
+    .from("violations")
+    .select("*, technician:technicians!inner(name,department)")
+    .order("date", { ascending: false });
+  if (!isManager) {
+    violationsQuery = violationsQuery.eq("technician.department", department);
+  }
 
   const [
     { data: wos },
@@ -20,11 +48,11 @@ export default async function DashboardPage() {
     { data: purchases },
     { data: violations },
   ] = await Promise.all([
+    // work_orders و purchases: مفيش عمود قسم في الـ schema، فبيرجعوا كاملين لكل الأدوار حاليًا
     supabase.from("work_orders").select("*").order("id", { ascending: false }),
-    supabase.from("attendance").select("*, technician:technicians(name,route)").eq("date", today),
+    attendanceQuery,
     supabase.from("purchases").select("*, work_order:work_orders(wo_number)").order("id", { ascending: false }),
-    // من غير فلتر شهر هنا؛ الشهر المطلوب بيتحدد من الواجهة نفسها (Month Selector)
-    supabase.from("violations").select("*, technician:technicians(name)").order("date", { ascending: false }),
+    violationsQuery,
   ]);
 
   return (
