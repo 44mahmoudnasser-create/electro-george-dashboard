@@ -9,12 +9,29 @@ export default async function AttendancePage() {
   const supabase = createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
-  const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
+
+  const { data: appUser } = await supabase
+    .from("app_users")
+    .select("role, department")
+    .eq("id", user.id)
+    .single();
+
   const role = appUser?.role ?? "secretary";
-  const { data: technicians } = await supabase.from("technicians").select("*").order("name");
+  const department = appUser?.department ?? null;
+
+  const { data: technicians } = await supabase
+    .from("technicians")
+    .select("*")
+    .eq("department", department)
+    .order("name");
+
   return (
     <AppShell role={role}>
-      <AttendanceClient initialTechnicians={technicians ?? []} role={role} />
+      <AttendanceClient
+        initialTechnicians={technicians ?? []}
+        role={role}
+        department={department}
+      />
     </AppShell>
   );
 }
