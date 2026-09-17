@@ -6,7 +6,8 @@ const withPWA = withPWAInit({
   disable: process.env.NODE_ENV === "development",
   register: false,
   skipWaiting: true,
-  importScripts: ["/sw-push.js"], // يضيف كود الـ push فوق service worker الأساسي
+  importScripts: ["/sw-push.js"],
+  buildExcludes: [/manifest$/, /app-build-manifest/], // استثني الملفات المسببة للمشكلة
 });
 
 const nextConfig = {
