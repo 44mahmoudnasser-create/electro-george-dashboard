@@ -34,15 +34,23 @@ export async function subscribeToPush(userId: string) {
   }
 
   const sub = subscription.toJSON();
-  const { error } = await supabase.from("push_subscriptions").upsert(
-    {
-      user_id: userId,
-      endpoint: sub.endpoint!,
-      p256dh: sub.keys!.p256dh,
-      auth: sub.keys!.auth,
-    },
-    { onConflict: "endpoint" }
-  );
+  
+  console.log("DEBUG - userId:", userId);
+  console.log("DEBUG - subscription endpoint:", sub.endpoint);
 
-  return !error;
+  const { error } = await supabase.from("push_subscriptions").insert({
+    user_id: userId,
+    endpoint: sub.endpoint!,
+    p256dh: sub.keys!.p256dh,
+    auth: sub.keys!.auth,
+  });
+
+  console.log("INSERT error:", error);
+
+  if (error) {
+    console.error("Failed to save subscription:", error);
+    return false;
+  }
+
+  return true;
 }
