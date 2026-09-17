@@ -1,56 +1,17 @@
-"use client";
-import { supabase } from "@/lib/supabase";
+/** @type {import('next').NextConfig} */
+import withPWAInit from "next-pwa";
 
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; i++) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
+const withPWA = withPWAInit({
+  dest: "public",
+  disable: process.env.NODE_ENV === "development",
+  register: false,
+  skipWaiting: true,
+  importScripts: ["/sw-push.js"],
+  buildExcludes: [/manifest$/, /app-build-manifest/], // استثني الملفات المسببة للمشكلة
+});
 
-export async function subscribeToPush(userId: string) {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    alert("المتصفح ده مش بيدعم الإشعارات");
-    return false;
-  }
+const nextConfig = {
+  images: { remotePatterns: [{ protocol: "https", hostname: "*.supabase.co" }] },
+};
 
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") return false;
-
-  const registration = await navigator.serviceWorker.ready;
-
-  let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(
-        process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!
-      ),
-    });
-  }
-
-  const sub = subscription.toJSON();
-  
-  console.log("DEBUG - userId:", userId);
-  console.log("DEBUG - subscription endpoint:", sub.endpoint);
-
-  const { error } = await supabase.from("push_subscriptions").insert({
-    user_id: userId,
-    endpoint: sub.endpoint!,
-    p256dh: sub.keys!.p256dh,
-    auth: sub.keys!.auth,
-  });
-
-  console.log("INSERT error:", error);
-
-  if (error) {
-    console.error("Failed to save subscription:", error);
-    return false;
-  }
-
-  return true;
-}
+export default withPWA(nextConfig);
