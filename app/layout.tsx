@@ -1,6 +1,17 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import RegisterSW from "@/components/RegisterSW";
 
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="ar" dir="rtl">
+      <body className="...">
+        <RegisterSW />
+        {children}
+      </body>
+    </html>
+  );
+}
 export const metadata: Metadata = {
   title: "Electro George — نظام قسم التجميع",
   description: "نظام متابعة قسم التجميع الميكانيكي",
