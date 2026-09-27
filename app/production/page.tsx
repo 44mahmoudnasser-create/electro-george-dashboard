@@ -12,7 +12,6 @@ export default async function ProductionOnlyPage() {
   if (!user) redirect("/login");
 
   // أي حد مش من الدورين دول ملوش حق يدخل هنا، يترجع لتطبيقه العادي
-  if (!ALLOWED_ROLES.includes(role as any)) redirect("/dashboard"); // 👈 غيّر المسار ده لو صفحة الدخول الرئيسية عندك اسمها مختلف
 
   const { data: wos } = await supabase
     .from("work_orders")
