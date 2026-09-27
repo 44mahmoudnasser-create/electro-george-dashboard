@@ -137,10 +137,11 @@ export default function AttendanceClient({
           </tr></thead>
           <tbody>
             {rows.map((r, i) => {
-              const tech = visibleTechnicians.find(t => t.id === r.tech_id)!;
-              return (
-                <tr key={r.tech_id}>
-                  <td className="font-medium text-text">{tech.name}</td>
+  const tech = visibleTechnicians.find(t => t.id === r.tech_id);
+  if (!tech) return null;
+  return (
+    <tr key={r.tech_id}>
+      <td className="font-medium text-text">{tech.name}</td>
                   <td>
                     <select value={r.status} onChange={e => setRow(r.tech_id, { status: e.target.value })}
                       className="eg-select w-36 text-sm">
