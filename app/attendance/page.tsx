@@ -20,6 +20,7 @@ export default async function AttendancePage() {
   const department = appUser?.department ?? null;
   const isManager = role === "manager";
 
+  // لو manager، هات كل الفنيين + قايمة الأقسام المتاحة
   let techQuery = supabase.from("technicians").select("*").order("name");
   if (!isManager) {
     techQuery = techQuery.eq("department", department);
@@ -27,12 +28,24 @@ export default async function AttendancePage() {
 
   const { data: technicians } = await techQuery;
 
+  // قايمة الأقسام (بس لو manager محتاجها للـ selector)
+  let departments: string[] = [];
+  if (isManager) {
+    const { data: deptRows } = await supabase
+      .from("technicians")
+      .select("department")
+      .not("department", "is", null);
+    departments = [...new Set((deptRows ?? []).map(d => d.department))].sort();
+  }
+
   return (
     <AppShell role={role}>
       <AttendanceClient
         initialTechnicians={technicians ?? []}
         role={role}
         department={department}
+        isManager={isManager}
+        departments={departments}
       />
     </AppShell>
   );
