@@ -39,9 +39,6 @@ export async function middleware(request: NextRequest) {
     if (!isRestricted && pathname === "/login") {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
-    if (!isRestricted && pathname.startsWith(RESTRICTED_HOME)) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
-    }
   }
 
   return response;
