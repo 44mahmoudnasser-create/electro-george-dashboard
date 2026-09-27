@@ -16,13 +16,15 @@ export default function DashboardClient({
   wos, attendance, purchases, violations, today, thisMonth, role
 }: {
   wos: WorkOrder[];
-  attendance: (Attendance & { technician?: { name:string; route:string } })[];
+  attendance: (Attendance & { technician?: { name:string; route:string; department?:string } })[];
   purchases: (Purchase & { work_order?: { wo_number:string } })[];
   violations: (Violation & { technician?: { name:string }; date?: string })[];
   today: string; thisMonth: string; role: string;
 }) {
   const [modal, setModal] = useState<{ type:string; data?:unknown[] } | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(thisMonth); // صيغة "YYYY-MM"، المستخدم بيختارها من الـ selector
+
+  const isManager = role === "manager";
 
   const monthLabel = useMemo(() => {
     const [y, m] = selectedMonth.split("-").map(Number);
@@ -94,6 +96,17 @@ export default function DashboardClient({
 
   const open = (type:string, data?:unknown[]) => setModal({ type, data });
   const close = () => setModal(null);
+
+  /* ── يجمع array من attendance حسب القسم (للمدير بس) ── */
+  const groupByDept = (list: (Attendance & { technician?: { name:string; route:string; department?:string } })[]) => {
+    const groups: Record<string, typeof list> = {};
+    list.forEach(item => {
+      const dept = item.technician?.department ?? "غير محدد";
+      if (!groups[dept]) groups[dept] = [];
+      groups[dept].push(item);
+    });
+    return groups;
+  };
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
@@ -283,13 +296,35 @@ export default function DashboardClient({
 
       <Modal open={!!modal && ["present","absent","att-filter"].includes(modal.type)}
         onClose={close} title="تفاصيل الحضور">
-        <div className="space-y-2">
-          {((modal?.data ?? []) as (Attendance & {technician?:{name:string;route:string};})[]).map((a,i) => (
-            <div key={i} className="flex items-center justify-between bg-card2 rounded-lg px-4 py-3">
-              <Badge label={a.status} />
-              <span className="text-sm text-text">{a.technician?.name ?? "—"}</span>
+        <div className="space-y-4">
+          {isManager ? (
+            // للمدير: مقسمة حسب القسم
+            Object.entries(groupByDept((modal?.data ?? []) as any)).map(([dept, items]) => (
+              <div key={dept}>
+                <h3 className="text-sm font-bold text-accent mb-2 border-b border-border/40 pb-1">
+                  📁 {dept} ({items.length})
+                </h3>
+                <div className="space-y-2">
+                  {items.map((a, i) => (
+                    <div key={i} className="flex items-center justify-between bg-card2 rounded-lg px-4 py-3">
+                      <Badge label={a.status} />
+                      <span className="text-sm text-text">{a.technician?.name ?? "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (
+            // لغير المدير: قايمة عادية زي الأول
+            <div className="space-y-2">
+              {((modal?.data ?? []) as (Attendance & {technician?:{name:string;route:string;department?:string};})[]).map((a,i) => (
+                <div key={i} className="flex items-center justify-between bg-card2 rounded-lg px-4 py-3">
+                  <Badge label={a.status} />
+                  <span className="text-sm text-text">{a.technician?.name ?? "—"}</span>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
           {(modal?.data?.length ?? 0) === 0 && <EmptyState />}
         </div>
       </Modal>
