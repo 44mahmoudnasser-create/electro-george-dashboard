@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { Technician } from "@/types";
 import { today } from "@/lib/utils";
@@ -12,17 +12,30 @@ const PERM_OPTS = ["—","إذن ساعتين صباحي","إذن ساعتين �
 type AttRow = { tech_id:number; status:string; permission:string; overtime:boolean };
 
 export default function AttendanceClient({
-  initialTechnicians, role, department
-}: { initialTechnicians: Technician[]; role: string; department: string | null }) {
+  initialTechnicians, role, department, isManager, departments
+}: {
+  initialTechnicians: Technician[];
+  role: string;
+  department: string | null;
+  isManager: boolean;
+  departments: string[];
+}) {
   const [date, setDate] = useState(today());
+  const [selectedDept, setSelectedDept] = useState<string>(isManager ? "الكل" : (department ?? ""));
   const [rows, setRows] = useState<AttRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState<{name:string;date:string;status:string}[]>([]);
 
+  // الفنيين المفلترين حسب القسم المختار (لو manager)
+  const visibleTechnicians = useMemo(() => {
+    if (!isManager || selectedDept === "الكل") return initialTechnicians;
+    return initialTechnicians.filter(t => t.department === selectedDept);
+  }, [initialTechnicians, selectedDept, isManager]);
+
   const load = async () => {
     setLoading(true);
-    const techIds = initialTechnicians.map(t => t.id);
+    const techIds = visibleTechnicians.map(t => t.id);
 
     if (techIds.length === 0) {
       setRows([]);
@@ -39,25 +52,24 @@ export default function AttendanceClient({
     const attMap = Object.fromEntries((att.data ?? []).map(r => [r.tech_id, r.status]));
     const permMap = Object.fromEntries((perm.data ?? []).map(r => [r.tech_id, r.permission_type]));
     const otMap = Object.fromEntries((ot.data ?? []).map(r => [r.tech_id, r.has_overtime]));
-    setRows(initialTechnicians.map(t => ({
+    setRows(visibleTechnicians.map(t => ({
       tech_id: t.id,
       status: attMap[t.id] ?? "حاضر",
       permission: permMap[t.id] ?? "—",
       overtime: otMap[t.id] ?? false,
     })));
 
-    // History — بس فنيين نفس القسم
     const { data: hist } = await supabase
       .from("attendance")
       .select("tech_id, date, status, technicians!inner(name, department)")
-      .eq("technicians.department", department)
+      .in("tech_id", techIds)
       .order("date", { ascending: false })
       .limit(50);
     setHistory((hist ?? []).map((r:any) => ({ name: r.technicians?.name, date: r.date, status: r.status })));
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [date]);
+  useEffect(() => { load(); }, [date, selectedDept]);
 
   const setRow = (tech_id:number, patch: Partial<AttRow>) => {
     setRows(prev => prev.map(r => r.tech_id === tech_id ? { ...r, ...patch } : r));
@@ -78,16 +90,17 @@ export default function AttendanceClient({
         .upsert({ tech_id: r.tech_id, date, has_overtime: r.overtime }, { onConflict: "tech_id,date" });
     }
     setSaving(false);
-    // إرسال إشعار للمدير/الأدمن
-  fetch("/api/push/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: "📅 تسجيل حضور جديد",
-      body: `تم تسجيل الحضور بتاريخ ${date}`,
-      url: "/attendance",
-    }),
-  }).catch(() => {}); // لو فشل الإرسال، متوقفش عملية الحفظv
+
+    fetch("/api/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "📅 تسجيل حضور جديد",
+        body: `تم تسجيل الحضور بتاريخ ${date}`,
+        url: "/attendance",
+      }),
+    }).catch(() => {});
+
     alert("✅ تم الحفظ بنجاح");
   };
 
@@ -95,7 +108,17 @@ export default function AttendanceClient({
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-xl font-bold text-text">📅 الحضور والإذونات</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isManager && (
+            <select
+              value={selectedDept}
+              onChange={e => setSelectedDept(e.target.value)}
+              className="eg-select w-40"
+            >
+              <option value="الكل">كل الأقسام</option>
+              {departments.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
           <input type="date" value={date} onChange={e => setDate(e.target.value)} className="eg-input w-44" />
           <button onClick={load} className="eg-btn-ghost" disabled={loading}>
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
@@ -114,7 +137,7 @@ export default function AttendanceClient({
           </tr></thead>
           <tbody>
             {rows.map((r, i) => {
-              const tech = initialTechnicians.find(t => t.id === r.tech_id)!;
+              const tech = visibleTechnicians.find(t => t.id === r.tech_id)!;
               return (
                 <tr key={r.tech_id}>
                   <td className="font-medium text-text">{tech.name}</td>
