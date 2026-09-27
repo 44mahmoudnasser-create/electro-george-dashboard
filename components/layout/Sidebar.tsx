@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Users, Wrench, ClipboardList, FolderOpen,
-  AlertTriangle, ShoppingCart, CalendarCheck, BarChart3, LogOut
+  AlertTriangle, ShoppingCart, CalendarCheck, BarChart3, LogOut, Factory
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
@@ -19,6 +19,7 @@ const NAV = [
   { href: "/purchases",   icon: ShoppingCart,     label: "طلبات الشراء" },
   { href: "/attendance",  icon: CalendarCheck,    label: "الحضور" },
   { href: "/productivity",icon: BarChart3,         label: "الإنتاجية" },
+  { href: "/production",  icon: Factory,           label: "خط الإنتاج" },
 ];
 
 export default function Sidebar({ role }: { role: string }) {
