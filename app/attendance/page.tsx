@@ -35,8 +35,7 @@ export default async function AttendancePage() {
       .from("technicians")
       .select("department")
       .not("department", "is", null);
-    departments = [...new Set((deptRows ?? []).map(d => d.department))].sort();
-  }
+departments = Array.from(new Set((deptRows ?? []).map(d => d.department))).sort();  }
 
   return (
     <AppShell role={role}>
