@@ -1,10 +1,8 @@
 import { createSupabaseServerClient } from "./supabase-server";
 
 /**
- * Get the current user's role from auth metadata.
- * Falls back to "admin" if no role set (so the first user always has access).
- * Role is set via: Supabase Dashboard → Authentication → Users → Edit user metadata
- * OR via SQL: UPDATE auth.users SET raw_user_meta_data = '{"role":"admin"}' WHERE email='...'
+ * Get the current user's role from app_users table (مصدر الحقيقة الوحيد).
+ * Falls back to "admin" if no row found (so the first user always has access).
  */
 export async function getUserRole(): Promise<{ user: any; role: string }> {
   const supabase = createSupabaseServerClient();
@@ -12,10 +10,6 @@ export async function getUserRole(): Promise<{ user: any; role: string }> {
 
   if (!user) return { user: null, role: "secretary" };
 
-  // Read from user metadata (set via Supabase dashboard or SQL)
-  const metaRole = user.user_metadata?.role as string | undefined;
-
-  // Also try app_users table as backup
   let dbRole: string | undefined;
   try {
     const { data } = await supabase
@@ -26,8 +20,8 @@ export async function getUserRole(): Promise<{ user: any; role: string }> {
     dbRole = data?.role;
   } catch {}
 
-  // Priority: metadata > db > default to "admin" (fail open for first user)
-  const role = metaRole ?? dbRole ?? "admin";
+  // Priority: db (مصدر الحقيقة الوحيد) > fallback to "admin" لو مفيش صف خالص
+  const role = dbRole ?? "admin";
 
   return { user, role };
 }
