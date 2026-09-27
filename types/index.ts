@@ -1,16 +1,17 @@
-export type Role = "admin" | "secretary";
+export type Role = "admin" | "secretary" | "manager";
 
 export interface AppUser {
-  id: string; email: string; role: Role; full_name?: string;
+  id: string; email: string; role: Role; full_name?: string; department?: string | null;
 }
 export interface Technician {
   id: number; name: string; grade: "فني"|"مشرف"|"مساعد"; route?: string;
-  skills?: string[];
+  skills?: string[]; department?: string | null;
 }
 export interface WorkOrder {
   id: number; wo_number: string; status: string;
   created_date?: string; expected_delivery?: string; completion_date?: string;
   chk_client: boolean; chk_quality: boolean; chk_assembly: boolean;
+  department?: string | null;
 }
 export interface Attendance {
   id: number; tech_id: number; date: string;
@@ -28,12 +29,12 @@ export interface Overtime {
 export interface Purchase {
   id: number; wo_id?: number; item_name: string; qty: number;
   request_date?: string; supply_date?: string; status: string;
-  image_path?: string; work_order?: WorkOrder;
+  image_path?: string; work_order?: WorkOrder; department?: string | null;
 }
 export interface File_ {
   id: number; wo_id?: number; file_name: string; file_type?: string;
   receive_date?: string; delivered_to?: number; delivery_date?: string;
-  work_order?: WorkOrder; supervisor?: Technician;
+  work_order?: WorkOrder; supervisor?: Technician; department?: string | null;
 }
 export interface Violation {
   id: number; tech_id: number; date?: string; reason?: string; details?: string;
@@ -42,5 +43,5 @@ export interface Violation {
 export interface DailyProductivity {
   id: number; tech_id: number; wo_id?: number; work_date: string;
   task: string; notes?: string;
-  technician?: Technician; work_order?: WorkOrder;
+  technician?: Technician; work_order?: WorkOrder; department?: string | null;
 }
