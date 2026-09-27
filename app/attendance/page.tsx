@@ -18,12 +18,14 @@ export default async function AttendancePage() {
 
   const role = appUser?.role ?? "secretary";
   const department = appUser?.department ?? null;
+  const isManager = role === "manager";
 
-  const { data: technicians } = await supabase
-    .from("technicians")
-    .select("*")
-    .eq("department", department)
-    .order("name");
+  let techQuery = supabase.from("technicians").select("*").order("name");
+  if (!isManager) {
+    techQuery = techQuery.eq("department", department);
+  }
+
+  const { data: technicians } = await techQuery;
 
   return (
     <AppShell role={role}>
