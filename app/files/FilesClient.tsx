@@ -37,6 +37,15 @@ export default function FilesClient({
     (f.work_order?.wo_number ?? "").includes(search)
   );
 
+  // بيبعت إيميل + إشعار عن الملف (التفاصيل بتتقرا من الداتابيز في السيرفر)
+  const notify = (fileId: number, event: "received" | "delivered") => {
+    fetch("/api/files/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId, event }),
+    }).catch(() => {}); // لو الإشعار فشل، متوقفش العملية
+  };
+
   const recvFile = async () => {
     if (!recvForm.file_name.trim()) return;
     setSaving(true);
@@ -48,6 +57,7 @@ export default function FilesClient({
     }).select(`*, work_order:work_orders(wo_number), supervisor:technicians(name)`).single();
     setSaving(false);
     if (error) { alert(error.message); return; }
+    notify(data.id, "received");
     setFiles(prev => [data, ...prev]);
     setRecvOpen(false);
     setRecvForm({ wo_id: "", file_name: "", file_type: FILE_TYPES[0], receive_date: today() });
@@ -64,6 +74,7 @@ export default function FilesClient({
     }).eq("id", fileId);
     setSaving(false);
     if (error) { alert(error.message); return; }
+    notify(fileId, "delivered");
     const sup = supervisors.find(s => s.id === supId);
     setFiles(prev => prev.map(f => f.id === fileId
       ? { ...f, delivered_to: supId, delivery_date: deliverForm.delivery_date, supervisor: sup ? { name: sup.name } : undefined }
