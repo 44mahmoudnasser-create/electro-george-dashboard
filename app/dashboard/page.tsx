@@ -5,20 +5,12 @@ import AppShell from "@/components/layout/AppShell";
 import DashboardClient from "./DashboardClient";
 
 export const dynamic = "force-dynamic";
-  const { user, role } = await getUserRole();
 
 export default async function DashboardPage() {
   const supabase = createSupabaseServerClient();
+  const { user, role, department } = await getUserRole();
   if (!user) redirect("/login");
 
-  // department بتتجاب من app_users مباشرة (getUserRole عندك مش راجعة department حاليًا)
-  const { data: appUser } = await supabase
-    .from("app_users")
-    .select("department")
-    .eq("id", user.id)
-    .single();
-
-  const department = appUser?.department ?? null;
   const isManager = role === "manager";
 
   const today = new Date().toISOString().split("T")[0];
@@ -48,7 +40,6 @@ export default async function DashboardPage() {
     { data: purchases },
     { data: violations },
   ] = await Promise.all([
-    // work_orders و purchases: مفيش عمود قسم في الـ schema، فبيرجعوا كاملين لكل الأدوار حاليًا
     supabase.from("work_orders").select("*").order("id", { ascending: false }),
     attendanceQuery,
     supabase.from("purchases").select("*, work_order:work_orders(wo_number)").order("id", { ascending: false }),
