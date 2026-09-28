@@ -10,6 +10,7 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY!
 );
 
+// service role: بيقرا كل الاشتراكات والإيميلات بغض النظر عن RLS
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -18,14 +19,17 @@ const supabaseAdmin = createClient(
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+const unique = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
+
 export async function POST(request: Request) {
+  // لازم يكون مسجل دخول، وإلا أي حد يقدر يبعت spam
   const supabase = createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { title, body, url } = await request.json();
-  const debug: Record<string, unknown> = {};
 
+  // مين اللي سجّل؟ (نجيب قسمه واسمه)
   const { data: sender } = await supabaseAdmin
     .from("app_users")
     .select("full_name, email, department")
@@ -36,26 +40,33 @@ export async function POST(request: Request) {
     .from("app_users")
     .select("id, email, notify_email, role, department")
     .in("role", ["manager", "admin"]);
-  if (candErr) debug.candidatesError = candErr.message;
+  if (candErr) console.error("Candidates query failed:", candErr.message);
 
-  const recipients = (candidates ?? []).filter(r =>
+  const senderDept = (sender?.department ?? "").toLowerCase();
+
+  // TO: أدمنز نفس قسم اللي سجّل (من غيره هو)
+  const toUsers = (candidates ?? []).filter(r =>
+    r.role === "admin" &&
     r.id !== user.id &&
-    (r.role === "manager" || (sender?.department && r.department === sender.department))
+    senderDept !== "" &&
+    (r.department ?? "").toLowerCase() === senderDept
   );
-  debug.candidates = candidates?.length ?? 0;
-  debug.recipients = recipients.length;
-  debug.senderRole = user.id;
 
-  if (recipients.length === 0) return NextResponse.json({ push: 0, email: 0, debug });
+  // CC: المديرين (من غير اللي سجّل لو هو نفسه مدير)
+  const ccUsers = (candidates ?? []).filter(r =>
+    r.role === "manager" && r.id !== user.id
+  );
 
-  // ---------- Push ----------
+  const recipients = [...toUsers, ...ccUsers];
+  if (recipients.length === 0) return NextResponse.json({ push: 0, email: 0 });
+
+  // ---------- 1) Push (لنفس المجموعتين) ----------
   let pushSent = 0;
   const { data: subs, error: subsErr } = await supabaseAdmin
     .from("push_subscriptions")
     .select("id, endpoint, p256dh, auth")
     .in("user_id", recipients.map(r => r.id));
-  if (subsErr) debug.subsError = subsErr.message;
-  debug.subscriptions = subs?.length ?? 0;
+  if (subsErr) console.error("Subscriptions query failed:", subsErr.message);
 
   const pushResults = await Promise.allSettled(
     (subs ?? []).map(s =>
@@ -65,28 +76,32 @@ export async function POST(request: Request) {
       )
     )
   );
-  const pushErrors: unknown[] = [];
   for (let i = 0; i < pushResults.length; i++) {
     const r = pushResults[i];
     if (r.status === "fulfilled") pushSent++;
     else {
       const code = (r.reason as any)?.statusCode;
-      pushErrors.push(code ?? String(r.reason));
       if ([404, 410].includes(code)) {
+        // الاشتراك انتهى أو اتلغى، امسحه
         await supabaseAdmin.from("push_subscriptions").delete().eq("id", subs![i].id);
+      } else {
+        console.error("Push failed:", code ?? r.reason);
       }
     }
   }
-  if (pushErrors.length) debug.pushErrors = pushErrors;
 
-  // ---------- Email ----------
+  // ---------- 2) Email ----------
   let emailSent = 0;
-  const emails = recipients.map(r => r.notify_email || r.email).filter(Boolean) as string[];
-  debug.emailTargets = emails;
+  const toEmails = unique(
+    toUsers.map(r => r.notify_email || r.email).filter(Boolean) as string[]
+  );
+  const ccEmails = unique(
+    ccUsers.map(r => r.notify_email || r.email).filter(Boolean) as string[]
+  ).filter(e => !toEmails.includes(e));
 
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    debug.emailError = "GMAIL_USER / GMAIL_APP_PASSWORD مش موجودين في Vercel";
-  } else if (emails.length) {
+    console.error("GMAIL_USER / GMAIL_APP_PASSWORD مش موجودين في Vercel");
+  } else if (toEmails.length || ccEmails.length) {
     try {
       const transporter = nodemailer.createTransport({
         service: "gmail",
@@ -95,10 +110,14 @@ export async function POST(request: Request) {
       const link = new URL(url || "/", request.url).toString();
       const who = sender?.full_name || sender?.email || "";
 
+      // لو مفيش أدمنز في القسم، المديرين ياخدوا مكان الـ To
+      const to = toEmails.length ? toEmails : ccEmails;
+      const cc = toEmails.length ? ccEmails : [];
+
       await transporter.sendMail({
         from: `"Electro George" <${process.env.GMAIL_USER}>`,
-        to: process.env.GMAIL_USER,
-        bcc: emails,
+        to,
+        ...(cc.length ? { cc } : {}),
         subject: title,
         text: `${body}\n${who ? `بواسطة: ${who}\n` : ""}${link}`,
         html: `
@@ -109,12 +128,11 @@ export async function POST(request: Request) {
             <a href="${link}" style="background:#10b981;color:#fff;padding:8px 16px;border-radius:8px;text-decoration:none">فتح النظام</a>
           </div>`,
       });
-      emailSent = emails.length;
-    } catch (err: any) {
-      debug.emailError = err?.message ?? String(err);
-      console.error("Email failed:", err);
+      emailSent = to.length + cc.length;
+    } catch (err) {
+      console.error("Email failed:", err); // لو الإيميل فشل، الـ push فضل شغال
     }
   }
 
-  return NextResponse.json({ push: pushSent, email: emailSent, debug });
+  return NextResponse.json({ push: pushSent, email: emailSent });
 }
