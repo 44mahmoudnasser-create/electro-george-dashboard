@@ -8,7 +8,6 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const supabase = createSupabaseServerClient();
-  const { user, role } = await getUserRole();
   if (!user) redirect("/login");
 
   // department بتتجاب من app_users مباشرة (getUserRole عندك مش راجعة department حاليًا)
