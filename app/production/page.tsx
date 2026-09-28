@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import ProductionOnlyClient from "./ProductionOnlyClient";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_ROLES = ["sheet_worker", "paint_worker"] as const;
 
 export default async function ProductionOnlyPage() {
   const supabase = createSupabaseServerClient();
