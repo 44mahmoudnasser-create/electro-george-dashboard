@@ -1,21 +1,28 @@
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { getUserRole } from "@/lib/get-role";
 import { redirect } from "next/navigation";
 import ProductionOnlyClient from "./ProductionOnlyClient";
 export const dynamic = "force-dynamic";
 
-
-export default async function ProductionOnlyPage() {
+export default async function ProductionPage() {
   const supabase = createSupabaseServerClient();
-  const { user, role } = await getUserRole();
+  const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // أي حد مش من الدورين دول ملوش حق يدخل هنا، يترجع لتطبيقه العادي
+  const { data: appUser } = await supabase
+    .from("app_users")
+    .select("department")
+    .eq("id", user.id)
+    .single();
 
   const { data: wos } = await supabase
     .from("work_orders")
     .select("id, wo_number")
     .order("id", { ascending: false });
 
-  return <ProductionOnlyClient wos={wos ?? []} role={role as "sheet_worker" | "paint_worker"} />;
+  return (
+    <ProductionOnlyClient
+      wos={wos ?? []}
+      department={appUser?.department ?? null}
+    />
+  );
 }
