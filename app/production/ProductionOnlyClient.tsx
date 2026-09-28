@@ -5,12 +5,10 @@ import { supabase } from "@/lib/supabase";
 import EmptyState from "@/components/ui/EmptyState";
 import { ChevronRight, LogOut, Search, ArrowUpDown } from "lucide-react";
 
-type Role = "sheet_worker" | "paint_worker";
-
-// كل دور بيقدر يعدل تشيك واحد بس، لكن بيشوف التلاتة
-const ROLE_EDITABLE_KEY: Record<Role, "chk_sheet" | "chk_paint"> = {
-  sheet_worker: "chk_sheet",
-  paint_worker: "chk_paint",
+// القسم هو اللي بيحدد مين يعدل أنهي تشيك (الباقي بيشوف بس)
+const DEPT_EDITABLE_KEY: Record<string, "chk_sheet" | "chk_paint"> = {
+  SHEET: "chk_sheet",
+  PAINT: "chk_paint",
 };
 const PROD_CHECKS = [
   { key: "chk_sheet",    label: "الصاج" },
@@ -18,11 +16,11 @@ const PROD_CHECKS = [
   { key: "chk_assembly", label: "التجميع" },
 ] as const;
 
-export default function ProductionOnlyClient({ wos, role }: {
-  wos: { id: number; wo_number: string }[]; role: Role;
+export default function ProductionOnlyClient({ wos, department }: {
+  wos: { id: number; wo_number: string }[]; department: string | null;
 }) {
   const router = useRouter();
-  const editableKey = ROLE_EDITABLE_KEY[role];
+  const editableKey = DEPT_EDITABLE_KEY[(department ?? "").toUpperCase()] ?? null;
   const [search, setSearch] = useState("");
   const [selectedWO, setSelectedWO] = useState<{ id: number; wo_number: string } | null>(null);
   const [items, setItems] = useState<any[]>([]);
