@@ -5,6 +5,7 @@ import AppShell from "@/components/layout/AppShell";
 import DashboardClient from "./DashboardClient";
 
 export const dynamic = "force-dynamic";
+  const { user, role } = await getUserRole();
 
 export default async function DashboardPage() {
   const supabase = createSupabaseServerClient();
