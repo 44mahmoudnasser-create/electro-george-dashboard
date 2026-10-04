@@ -162,13 +162,14 @@ export default function WODetailClient({
     setProdItems(prev => prev.filter((it:any) => it.id !== itemId));
   };
 
-  // ---------- BOM List (S.NO / Qty / Unit / Description / Drawing No. / Material Qty+Desc / Rev / Remark) ----------
-type BomDraftRow = {
-  s_no:string; qty:string; unit:string; description:string; part_no:string; remark:string;
-};
-const emptyBomDraftRow = (): BomDraftRow => ({
-  s_no:"", qty:"1", unit:"", description:"", part_no:"", remark:"",
-});
+  // ---------- BOM List (S.NO / Qty / Unit / Description / Part No. / Remark) ----------
+  const BOM_COLS = ["s_no","qty","unit","description","part_no","remark"] as const;
+  type BomDraftRow = {
+    s_no:string; qty:string; unit:string; description:string; part_no:string; remark:string;
+  };
+  const emptyBomDraftRow = (): BomDraftRow => ({
+    s_no:"", qty:"1", unit:"", description:"", part_no:"", remark:"",
+  });
   const [bomItems, setBomItems] = useState(initialBomItems);
   const [bomDraftRows, setBomDraftRows] = useState<BomDraftRow[]>([emptyBomDraftRow()]);
   const [savingBomList, setSavingBomList] = useState(false);
@@ -214,10 +215,7 @@ const emptyBomDraftRow = (): BomDraftRow => ({
         qty: parseFloat(r.qty) || 1,
         unit: r.unit.trim() || null,
         description: r.description.trim(),
-        drawing_no: r.drawing_no.trim() || null,
-        material_qty: r.material_qty.trim() ? parseFloat(r.material_qty) : null,
-        material_description: r.material_description.trim() || null,
-        rev: r.rev.trim() || null,
+        part_no: r.part_no.trim() || null,
         remark: r.remark.trim() || null,
       }));
     if (rowsToInsert.length === 0) return;
@@ -236,10 +234,7 @@ const emptyBomDraftRow = (): BomDraftRow => ({
       qty: String(item.qty),
       unit: item.unit ?? "",
       description: item.description,
-      drawing_no: item.drawing_no ?? "",
-      material_qty: item.material_qty != null ? String(item.material_qty) : "",
-      material_description: item.material_description ?? "",
-      rev: item.rev ?? "",
+      part_no: item.part_no ?? "",
       remark: item.remark ?? "",
     });
   };
@@ -251,10 +246,7 @@ const emptyBomDraftRow = (): BomDraftRow => ({
       qty: parseFloat(editBomForm.qty) || 1,
       unit: editBomForm.unit.trim() || null,
       description: editBomForm.description.trim(),
-      drawing_no: editBomForm.drawing_no.trim() || null,
-      material_qty: editBomForm.material_qty.trim() ? parseFloat(editBomForm.material_qty) : null,
-      material_description: editBomForm.material_description.trim() || null,
-      rev: editBomForm.rev.trim() || null,
+      part_no: editBomForm.part_no.trim() || null,
       remark: editBomForm.remark.trim() || null,
     };
     const { error } = await supabase.from("wo_bom_items").update(payload).eq("id", editBomItem.id);
@@ -610,8 +602,7 @@ const emptyBomDraftRow = (): BomDraftRow => ({
             {bomItems.length > 0 && (
               <table className="eg-table">
                 <thead><tr>
-                  <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Drawing No.</th>
-                  <th>Material Qty.</th><th>Material Desc.</th><th>Rev</th><th>Rem.</th>
+                  <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Part No.</th><th>Rem.</th>
                   <th>القسم</th><th>المنصرف</th><th>المتبقي</th><th>إجراءات</th>
                 </tr></thead>
                 <tbody>{bomItems.map((it:any) => {
@@ -622,10 +613,7 @@ const emptyBomDraftRow = (): BomDraftRow => ({
                       <td>{it.qty}</td>
                       <td>{it.unit ?? "—"}</td>
                       <td className="text-text">{it.description}</td>
-                      <td className="font-mono text-accent">{it.drawing_no ?? "—"}</td>
-                      <td>{it.material_qty ?? "—"}</td>
-                      <td>{it.material_description ?? "—"}</td>
-                      <td>{it.rev ?? "—"}</td>
+                      <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                       <td>{it.remark ?? "—"}</td>
                       <td><Badge label={it.department} /></td>
                       <td className="text-text font-medium">{it.qty_dispensed ?? 0}</td>
@@ -656,13 +644,12 @@ const emptyBomDraftRow = (): BomDraftRow => ({
             {canManageBom && (
               <div className="space-y-2">
                 <p className="text-xs text-subtext">
-                  الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Drawing No., Material Qty, Material Description, Rev, Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
+                  الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Part No., Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
                 </p>
                 <div className="overflow-x-auto border border-border rounded-lg">
                   <table className="eg-table">
                     <thead><tr>
-                      <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Drawing No.</th>
-                      <th>Material Qty.</th><th>Material Desc.</th><th>Rev</th><th>Rem.</th><th></th>
+                      <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Part No.</th><th>Rem.</th><th></th>
                     </tr></thead>
                     <tbody>
                       {bomDraftRows.map((row, rIdx) => (
@@ -736,29 +723,16 @@ const emptyBomDraftRow = (): BomDraftRow => ({
             <div><label className="eg-label">Unit</label>
               <input value={editBomForm.unit}
                 onChange={e=>setEditBomForm(f=>({...f,unit:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Drawing No.</label>
-              <input value={editBomForm.drawing_no}
-                onChange={e=>setEditBomForm(f=>({...f,drawing_no:e.target.value}))} className="eg-input" /></div>
+            <div><label className="eg-label">Part No.</label>
+              <input value={editBomForm.part_no}
+                onChange={e=>setEditBomForm(f=>({...f,part_no:e.target.value}))} className="eg-input" /></div>
           </div>
           <div><label className="eg-label">Description</label>
             <input value={editBomForm.description}
               onChange={e=>setEditBomForm(f=>({...f,description:e.target.value}))} className="eg-input" /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Material Qty.</label>
-              <input type="number" step="any" value={editBomForm.material_qty}
-                onChange={e=>setEditBomForm(f=>({...f,material_qty:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Material Description</label>
-              <input value={editBomForm.material_description}
-                onChange={e=>setEditBomForm(f=>({...f,material_description:e.target.value}))} className="eg-input" /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Rev</label>
-              <input value={editBomForm.rev}
-                onChange={e=>setEditBomForm(f=>({...f,rev:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Remark</label>
-              <input value={editBomForm.remark}
-                onChange={e=>setEditBomForm(f=>({...f,remark:e.target.value}))} className="eg-input" /></div>
-          </div>
+          <div><label className="eg-label">Remark</label>
+            <input value={editBomForm.remark}
+              onChange={e=>setEditBomForm(f=>({...f,remark:e.target.value}))} className="eg-input" /></div>
         </div>
         <button onClick={submitEditBomItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
       </Modal>
