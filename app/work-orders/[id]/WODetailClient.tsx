@@ -12,9 +12,12 @@ import { today } from "@/lib/utils";
 const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
 const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
 
-export default function WODetailClient({ wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, role }: {
+export default function WODetailClient({
+  wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, initialBomItems, role, department,
+}: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  products: { id:number; name:string }[]; initialWoProducts: any[]; initialProdItems: any[]; role: string;
+  products: { id:number; name:string }[]; initialWoProducts: any[]; initialProdItems: any[];
+  initialBomItems: any[]; role: string; department: string | null;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState(wo.status);
@@ -27,8 +30,9 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     chk_assembly: !!wo.chk_assembly,
   });
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist">("prod");
+  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist"|"bom">("prod");
   const todayStr = today();
+  const canManage = role === "admin" || role === "manager";
 
   // ---------- المنتجات القياسية المربوطة بالأوردر ----------
   const [woProducts, setWoProducts] = useState(initialWoProducts);
@@ -72,11 +76,11 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
   ] as const;
 
   const toggleProdCheck = async (itemId: number, key: string, value: boolean) => {
-    setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: value } : it)); // تحديث فوري بالواجهة
+    setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: value } : it));
     const { error } = await supabase.from("wo_production_items").update({ [key]: value }).eq("id", itemId);
     if (error) {
       alert(error.message);
-      setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: !value } : it)); // رجوع لو فشل
+      setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: !value } : it));
     }
   };
 
@@ -156,6 +160,140 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     setProdItems(prev => prev.filter((it:any) => it.id !== itemId));
   };
 
+  // ---------- BOM List (S.NO / Qty / Unit / Description / Drawing No. / Material Qty+Desc / Rev / Remark) ----------
+  const BOM_COLS = ["s_no","qty","unit","description","drawing_no","material_qty","material_description","rev","remark"] as const;
+  type BomDraftRow = {
+    s_no:string; qty:string; unit:string; description:string; drawing_no:string;
+    material_qty:string; material_description:string; rev:string; remark:string;
+  };
+  const emptyBomDraftRow = (): BomDraftRow => ({
+    s_no:"", qty:"1", unit:"", description:"", drawing_no:"",
+    material_qty:"", material_description:"", rev:"", remark:"",
+  });
+  const [bomItems, setBomItems] = useState(initialBomItems);
+  const [bomDraftRows, setBomDraftRows] = useState<BomDraftRow[]>([emptyBomDraftRow()]);
+  const [savingBomList, setSavingBomList] = useState(false);
+  const [editBomItem, setEditBomItem] = useState<any>(null);
+  const [editBomForm, setEditBomForm] = useState<BomDraftRow>(emptyBomDraftRow());
+  const [dispenseItem, setDispenseItem] = useState<any>(null);
+  const [dispenseQty, setDispenseQty] = useState("");
+  const [dispensing, setDispensing] = useState(false);
+
+  const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("\t") && !text.includes("\n")) return;
+    e.preventDefault();
+    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+    setBomDraftRows(prev => {
+      const updated = [...prev];
+      lines.forEach((line, i) => {
+        const cells = line.split("\t");
+        const targetIdx = rowIdx + i;
+        while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
+        const row = { ...updated[targetIdx] };
+        cells.forEach((val, j) => {
+          const col = BOM_COLS[colIdx + j];
+          if (col) (row as any)[col] = val.trim();
+        });
+        updated[targetIdx] = row;
+      });
+      return updated;
+    });
+  };
+
+  const updateBomDraftRow = (idx: number, patch: Partial<BomDraftRow>) =>
+    setBomDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
+  const addBomDraftRow = () => setBomDraftRows(prev => [...prev, emptyBomDraftRow()]);
+  const removeBomDraftRow = (idx: number) => setBomDraftRows(prev => prev.length > 1 ? prev.filter((_,i) => i !== idx) : [emptyBomDraftRow()]);
+
+  const saveBomList = async () => {
+    const rowsToInsert = bomDraftRows
+      .filter(r => r.description.trim())
+      .map(r => ({
+        work_order_id: wo.id,
+        s_no: r.s_no.trim() ? parseInt(r.s_no) : null,
+        qty: parseFloat(r.qty) || 1,
+        unit: r.unit.trim() || null,
+        description: r.description.trim(),
+        drawing_no: r.drawing_no.trim() || null,
+        material_qty: r.material_qty.trim() ? parseFloat(r.material_qty) : null,
+        material_description: r.material_description.trim() || null,
+        rev: r.rev.trim() || null,
+        remark: r.remark.trim() || null,
+        // department متحطة تلقائي من الـ trigger حسب قسم اليوزر
+      }));
+    if (rowsToInsert.length === 0) return;
+    setSavingBomList(true);
+    const { data, error } = await supabase.from("wo_bom_items").insert(rowsToInsert).select("*");
+    setSavingBomList(false);
+    if (error) { alert(error.message); return; }
+    setBomItems(prev => [...prev, ...(data ?? [])]);
+    setBomDraftRows([emptyBomDraftRow()]);
+  };
+
+  const openEditBomItem = (item: any) => {
+    setEditBomItem(item);
+    setEditBomForm({
+      s_no: item.s_no != null ? String(item.s_no) : "",
+      qty: String(item.qty),
+      unit: item.unit ?? "",
+      description: item.description,
+      drawing_no: item.drawing_no ?? "",
+      material_qty: item.material_qty != null ? String(item.material_qty) : "",
+      material_description: item.material_description ?? "",
+      rev: item.rev ?? "",
+      remark: item.remark ?? "",
+    });
+  };
+
+  const submitEditBomItem = async () => {
+    if (!editBomItem) return;
+    const payload = {
+      s_no: editBomForm.s_no.trim() ? parseInt(editBomForm.s_no) : null,
+      qty: parseFloat(editBomForm.qty) || 1,
+      unit: editBomForm.unit.trim() || null,
+      description: editBomForm.description.trim(),
+      drawing_no: editBomForm.drawing_no.trim() || null,
+      material_qty: editBomForm.material_qty.trim() ? parseFloat(editBomForm.material_qty) : null,
+      material_description: editBomForm.material_description.trim() || null,
+      rev: editBomForm.rev.trim() || null,
+      remark: editBomForm.remark.trim() || null,
+    };
+    const { error } = await supabase.from("wo_bom_items").update(payload).eq("id", editBomItem.id);
+    if (error) { alert(error.message); return; }
+    setBomItems(prev => prev.map((it:any) => it.id === editBomItem.id ? { ...it, ...payload } : it));
+    setEditBomItem(null);
+  };
+
+  const removeBomItem = async (itemId: number) => {
+    if (!confirm("حذف هذا البند من الـ BOM؟")) return;
+    await supabase.from("wo_bom_items").delete().eq("id", itemId);
+    setBomItems(prev => prev.filter((it:any) => it.id !== itemId));
+  };
+
+  const openDispense = (item: any) => {
+    setDispenseItem(item);
+    setDispenseQty("");
+  };
+
+  const submitDispense = async () => {
+    if (!dispenseItem) return;
+    const q = parseFloat(dispenseQty);
+    if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+    setDispensing(true);
+    const { error } = await supabase.rpc("dispense_bom_item", {
+      p_bom_item_id: dispenseItem.id,
+      p_qty: q,
+      p_note: null,
+    });
+    setDispensing(false);
+    if (error) { alert(error.message); return; }
+    setBomItems(prev => prev.map((it:any) =>
+      it.id === dispenseItem.id ? { ...it, qty_dispensed: (it.qty_dispensed ?? 0) + q } : it
+    ));
+    setDispenseItem(null);
+  };
+
   const save = async () => {
     setSaving(true);
     const patch: any = { status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks };
@@ -182,6 +320,7 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
     { key: "purchases", label: `المشتريات (${purchases.length})` },
     { key: "products",  label: `المنتجات (${woProducts.length})` },
     { key: "prodlist",  label: `قائمة الإنتاج (${prodItems.length})` },
+    { key: "bom",       label: `BOM (${bomItems.length})` },
   ] as const;
 
   return (
@@ -222,269 +361,3 @@ export default function WODetailClient({ wo, productivity, files, purchases, pro
             </div>
             <div>
               <label className="eg-label">شهر الخطة</label>
-              <input type="month" value={planMonth} onChange={e => setPlanMonth(e.target.value)} className="eg-input" />
-            </div>
-          </div>
-
-          {/* Checklist */}
-          <div className="bg-card2 rounded-lg p-4 space-y-3">
-            <p className="text-sm font-semibold text-text">✅ قائمة التحقق</p>
-            {CHECKLIST.map(({ key, label }) => (
-              <label key={key} className="flex items-center gap-3 cursor-pointer">
-                <input type="checkbox"
-                  checked={checks[key]}
-                  onChange={e => setChecks(c => ({ ...c, [key]: e.target.checked }))}
-                  className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                <span className="text-sm text-text">{label}</span>
-                {checks[key] && <span className="text-success text-xs">✓ تم</span>}
-              </label>
-            ))}
-          </div>
-
-          {/* Info row */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-            {[
-              ["تاريخ الإتمام", wo.completion_date ?? "—"],
-              ["التسليم المتوقع", wo.expected_delivery ?? "—"],
-            ].map(([l, v]) => (
-              <div key={l} className="bg-card2 rounded-lg p-3">
-                <p className="text-subtext text-xs mb-1">{l}</p>
-                <p className={`font-medium ${v !== "—" && wo.expected_delivery && wo.expected_delivery < todayStr && !["مكتمل","تم التسليم"].includes(status) ? "text-danger" : "text-text"}`}>{v}</p>
-              </div>
-            ))}
-          </div>
-
-          <button onClick={save} disabled={saving} className="eg-btn-success w-full justify-center">
-            <Save className="w-4 h-4" />{saving ? "جاري الحفظ..." : "💾 حفظ التعديلات"}
-          </button>
-        </div>
-      )}
-
-      {/* Readonly checklist for secretary */}
-      {role !== "admin" && (
-        <div className="eg-card">
-          <p className="text-sm font-semibold text-text mb-3">✅ قائمة التحقق</p>
-          {CHECKLIST.map(({ key, label }) => (
-            <div key={key} className="flex items-center gap-3 py-2 border-b border-border/30 last:border-0">
-              <span>{checks[key] ? "✅" : "⬜"}</span>
-              <span className="text-sm text-text">{label}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-1">
-        {TABS.map(({ key, label }) => (
-          <button key={key}
-            onClick={() => setActiveTab(key as any)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all
-              ${activeTab === key ? "bg-accent text-white" : "bg-card2 text-subtext hover:text-text"}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      <div className="eg-card overflow-x-auto">
-        {activeTab === "prod" && (
-          productivity.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الفني</th><th>التاريخ</th><th>المهمة</th><th>ملاحظات</th></tr></thead>
-              <tbody>{productivity.map((p, i) => (
-                <tr key={i}>
-                  <td className="text-text font-medium">{p.tech_name ?? "—"}</td>
-                  <td className="text-subtext">{p.work_date}</td>
-                  <td className="text-text">{p.task}</td>
-                  <td className="text-subtext">{p.notes ?? "—"}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد سجلات إنتاجية لهذا الأمر" />
-        )}
-
-        {activeTab === "files" && (
-          files.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الملف</th><th>النوع</th><th>استلام</th><th>سُلِّم لـ</th><th>تاريخ التسليم</th></tr></thead>
-              <tbody>{files.map((f, i) => (
-                <tr key={i}>
-                  <td className="text-text">{f.file_name}</td>
-                  <td className="text-subtext">{f.file_type ?? "—"}</td>
-                  <td className="text-subtext">{f.receive_date ?? "—"}</td>
-                  <td className="text-text">{f.supervisor_name ?? "—"}</td>
-                  <td className="text-subtext">{f.delivery_date ?? "—"}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد ملفات" />
-        )}
-
-        {activeTab === "purchases" && (
-          purchases.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الصنف</th><th>الكمية</th><th>طلب</th><th>توريد</th><th>الحالة</th><th>صورة</th></tr></thead>
-              <tbody>{purchases.map((p: any, i) => (
-                <tr key={i}>
-                  <td className="text-text">{p.item_name}</td>
-                  <td>{p.qty}</td>
-                  <td className="text-subtext">{p.request_date ?? "—"}</td>
-                  <td className={p.supply_date && p.supply_date < todayStr && p.status === "مفتوح" ? "text-danger font-medium" : "text-subtext"}>
-                    {p.supply_date ?? "—"}
-                  </td>
-                  <td><Badge label={p.status} /></td>
-                  <td>
-                    {p.image_path ? (
-                      <a href={getImageUrl(p.image_path)} target="_blank" rel="noopener"
-                        className="text-accent text-xs hover:underline">عرض</a>
-                    ) : <span className="text-subtext text-xs">—</span>}
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد طلبات شراء" />
-        )}
-
-        {activeTab === "products" && (
-          <div className="space-y-4">
-            {role === "admin" && (
-              <div className="flex flex-wrap items-end gap-2 bg-card2 rounded-lg p-3">
-                <div className="flex-1 min-w-[160px]">
-                  <label className="eg-label">المنتج القياسي</label>
-                  <select value={addProductId} onChange={e=>setAddProductId(e.target.value)} className="eg-select">
-                    <option value="">— اختر منتج —</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-                <div className="w-24">
-                  <label className="eg-label">الكمية</label>
-                  <input type="number" min="0.01" step="any" value={addProductQty}
-                    onChange={e=>setAddProductQty(e.target.value)} className="eg-input" />
-                </div>
-                <button onClick={addProduct} disabled={savingProduct || !addProductId} className="eg-btn-primary">
-                  {savingProduct ? "جاري الإضافة..." : "إضافة"}
-                </button>
-              </div>
-            )}
-            {woProducts.length ? (
-              <table className="eg-table">
-                <thead><tr><th>المنتج</th><th>الكمية</th>{role === "admin" && <th>إجراءات</th>}</tr></thead>
-                <tbody>{woProducts.map((wp:any) => (
-                  <tr key={wp.id}>
-                    <td className="text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
-                    <td>{wp.quantity}</td>
-                    {role === "admin" && (
-                      <td><button onClick={() => removeProduct(wp.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button></td>
-                    )}
-                  </tr>
-                ))}</tbody>
-              </table>
-            ) : <EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" />}
-          </div>
-        )}
-
-        {activeTab === "prodlist" && (
-          <div className="space-y-5">
-            {prodItems.length > 0 && (
-              <table className="eg-table">
-                <thead><tr>
-                  <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
-                  {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
-                  {role === "admin" && <th>إجراءات</th>}
-                </tr></thead>
-                <tbody>{prodItems.map((it:any) => (
-                  <tr key={it.id}>
-                    <td>{it.qty}</td>
-                    <td className="text-text">{it.description}</td>
-                    <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
-                    <td>{it.sheet_steel ?? "—"}</td>
-                    <td>{it.thickness ?? "—"}</td>
-                    {PROD_CHECKS.map(c => (
-                      <td key={c.key} className="text-center">
-                        <input type="checkbox" checked={!!it[c.key]}
-                          onChange={e => toggleProdCheck(it.id, c.key, e.target.checked)}
-                          className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                      </td>
-                    ))}
-                    {role === "admin" && (
-                      <td>
-                        <div className="flex gap-2">
-                          <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
-                          <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}</tbody>
-              </table>
-            )}
-
-            {role === "admin" && (
-              <div className="space-y-2">
-                <p className="text-xs text-subtext">
-                  الصق البنود مباشرة من إكسل (Qty, Description, Part No., Sheet Steel, Thickness) في أي خانة، أو اكتبها يدويًا.
-                </p>
-                <div className="overflow-x-auto border border-border rounded-lg">
-                  <table className="eg-table">
-                    <thead><tr>
-                      <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th><th></th>
-                    </tr></thead>
-                    <tbody>
-                      {draftRows.map((row, rIdx) => (
-                        <tr key={rIdx}>
-                          {PROD_COLS.map((col, cIdx) => (
-                            <td key={col}>
-                              <input value={(row as any)[col]}
-                                onChange={e => updateDraftRow(rIdx, { [col]: e.target.value } as Partial<DraftRow>)}
-                                onPaste={e => handleGridPaste(e, rIdx, cIdx)}
-                                className="eg-input !py-1 !text-sm" />
-                            </td>
-                          ))}
-                          <td>
-                            <button onClick={() => removeDraftRow(rIdx)} className="text-danger/60 hover:text-danger text-xs">✕</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={addDraftRow} className="eg-btn-ghost text-xs">+ صف يدوي</button>
-                  <button onClick={saveProdList} disabled={savingProdList} className="eg-btn-primary text-sm">
-                    {savingProdList ? "جاري الحفظ..." : "💾 حفظ البنود"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* تعديل صف من قائمة إنتاج الأمر */}
-      <Modal open={!!editProdItem} onClose={() => setEditProdItem(null)} title="تعديل صف قائمة الإنتاج">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Qty</label>
-              <input type="number" min="0.01" step="any" value={editProdForm.qty}
-                onChange={e=>setEditProdForm(f=>({...f,qty:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Part No.</label>
-              <input value={editProdForm.part_no}
-                onChange={e=>setEditProdForm(f=>({...f,part_no:e.target.value}))} className="eg-input" /></div>
-          </div>
-          <div><label className="eg-label">Description</label>
-            <input value={editProdForm.description}
-              onChange={e=>setEditProdForm(f=>({...f,description:e.target.value}))} className="eg-input" /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Sheet Steel</label>
-              <input value={editProdForm.sheet_steel}
-                onChange={e=>setEditProdForm(f=>({...f,sheet_steel:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Thickness</label>
-              <input value={editProdForm.thickness}
-                onChange={e=>setEditProdForm(f=>({...f,thickness:e.target.value}))} className="eg-input" /></div>
-          </div>
-        </div>
-        <button onClick={submitEditProdItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
-      </Modal>
-    </div>
-  );
-}
