@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function WODetailPage({ params }: { params: { id: string } }) {
   const supabase = createSupabaseServerClient();
-  const { user, role } = await getUserRole();
+  const { user, role, department } = await getUserRole();
   if (!user) redirect("/login");
 
   const woId = parseInt(params.id);
@@ -21,6 +21,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: products },
     { data: woProducts },
     { data: prodItems },
+    { data: bomItems },
   ] = await Promise.all([
     supabase.from("work_orders").select("*").eq("id", woId).single(),
     supabase.from("daily_productivity")
@@ -38,6 +39,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
       .select("id, quantity, standard_product:standard_products(id,name)")
       .eq("work_order_id", woId),
     supabase.from("wo_production_items").select("*").eq("work_order_id", woId).order("id", { ascending: true }),
+    // RLS بتفلتر تلقائي: كل قسم يشوف بنوده هو بس، والمدير يشوف الكل
+    supabase.from("wo_bom_items").select("*").eq("work_order_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
   ]);
 
   if (!wo) notFound();
@@ -52,7 +55,9 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         products={products ?? []}
         initialWoProducts={woProducts ?? []}
         initialProdItems={prodItems ?? []}
+        initialBomItems={bomItems ?? []}
         role={role}
+        department={department}
       />
     </AppShell>
   );
