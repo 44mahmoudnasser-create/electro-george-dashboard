@@ -344,7 +344,7 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
   ] as const;
 
   return (
-    <div className="flex flex-col h-full p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+    <div className="flex flex-col h-full p-4 md:p-6 w-full mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => router.back()} className="eg-btn-ghost text-sm px-3 py-2">
@@ -630,11 +630,19 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
             )}
 
             {bomItems.length > 0 && (
-              <table className="eg-table">
-                <thead><tr>
-                  <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Part No.</th><th>Rem.</th>
-                  <th>القسم</th><th>المنصرف</th><th>المتبقي</th><th>إجراءات</th>
-                </tr></thead>
+  <table className="eg-table w-full table-fixed">
+    <thead><tr>
+      <th className="w-14">S.NO.</th>
+      <th className="w-16">Qty.</th>
+      <th className="w-16">Unit</th>
+      <th className="w-auto">Description</th>
+      <th className="w-28">Part No.</th>
+      <th className="w-32">Rem.</th>
+      <th className="w-20">القسم</th>
+      <th className="w-20">المنصرف</th>
+      <th className="w-20">المتبقي</th>
+      <th className="w-32">إجراءات</th>
+    </tr></thead>
                 <tbody>{bomItems.map((it:any) => {
                   const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
                   return (
@@ -642,7 +650,7 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
                       <td>{it.s_no ?? "—"}</td>
                       <td>{it.qty}</td>
                       <td>{it.unit ?? "—"}</td>
-                      <td className="text-text">{it.description}</td>
+<td className="text-text whitespace-normal break-words">{it.description}</td>
                       <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                       <td>{it.remark ?? "—"}</td>
                       <td><Badge label={it.department} /></td>
@@ -676,11 +684,17 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
                 <p className="text-xs text-subtext">
                   الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Part No., Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
                 </p>
-                <div className="overflow-x-auto border border-border rounded-lg">
-                  <table className="eg-table">
-                    <thead><tr>
-                      <th>S.NO.</th><th>Qty.</th><th>Unit</th><th>Description</th><th>Part No.</th><th>Rem.</th><th></th>
-                    </tr></thead>
+                <div className="border border-border rounded-lg">
+  <table className="eg-table w-full table-fixed">
+    <thead><tr>
+      <th className="w-14">S.NO.</th>
+      <th className="w-16">Qty.</th>
+      <th className="w-16">Unit</th>
+      <th className="w-auto">Description</th>
+      <th className="w-28">Part No.</th>
+      <th className="w-32">Rem.</th>
+      <th className="w-8"></th>
+    </tr></thead>
                     <tbody>
                       {bomDraftRows.map((row, rIdx) => (
                         <tr key={rIdx}>
