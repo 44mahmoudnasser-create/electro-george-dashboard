@@ -179,28 +179,58 @@ export default function WODetailClient({
   const [dispenseQty, setDispenseQty] = useState("");
   const [dispensing, setDispensing] = useState(false);
 
-  const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
-    const text = e.clipboardData.getData("text");
-    if (!text.includes("\t") && !text.includes("\n")) return;
-    e.preventDefault();
-    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
-    setBomDraftRows(prev => {
-      const updated = [...prev];
-      lines.forEach((line, i) => {
-        const cells = line.split("\t");
-        const targetIdx = rowIdx + i;
-        while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
-        const row = { ...updated[targetIdx] };
-        cells.forEach((val, j) => {
-          const col = BOM_COLS[colIdx + j];
-          if (col) (row as any)[col] = val.trim();
-        });
-        updated[targetIdx] = row;
-      });
-      return updated;
-    });
+const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+  const text = e.clipboardData.getData("text");
+  if (!text.includes("\t") && !text.includes("\n")) return;
+  e.preventDefault();
+
+  // بيقسم نص Excel المنسوخ إلى صفوف وخلايا، مع احترام الخلايا اللي بين علامتي تنصيص
+  // وبتحتوي على أسطر جديدة (\n) جواها من غير ما يعتبرها صفوف منفصلة
+  const parseExcelClipboard = (input: string): string[][] => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let cell = "";
+    let inQuotes = false;
+    let i = 0;
+    const clean = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    while (i < clean.length) {
+      const ch = clean[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (clean[i + 1] === '"') { cell += '"'; i += 2; continue; } // "" جوه quotes = " واحدة
+          inQuotes = false; i++; continue;
+        }
+        cell += ch; i++; continue;
+      }
+      if (ch === '"') { inQuotes = true; i++; continue; }
+      if (ch === "\t") { row.push(cell); cell = ""; i++; continue; }
+      if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
+      cell += ch; i++;
+    }
+    row.push(cell);
+    if (row.length > 1 || row[0] !== "") rows.push(row);
+
+    return rows;
   };
 
+  const lines = parseExcelClipboard(text);
+
+  setBomDraftRows(prev => {
+    const updated = [...prev];
+    lines.forEach((cells, i) => {
+      const targetIdx = rowIdx + i;
+      while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
+      const row = { ...updated[targetIdx] };
+      cells.forEach((val, j) => {
+        const col = BOM_COLS[colIdx + j];
+        if (col) (row as any)[col] = val.trim();
+      });
+      updated[targetIdx] = row;
+    });
+    return updated;
+  });
+};
   const updateBomDraftRow = (idx: number, patch: Partial<BomDraftRow>) =>
     setBomDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
   const addBomDraftRow = () => setBomDraftRows(prev => [...prev, emptyBomDraftRow()]);
