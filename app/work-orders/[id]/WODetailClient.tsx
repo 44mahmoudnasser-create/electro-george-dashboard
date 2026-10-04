@@ -163,15 +163,12 @@ export default function WODetailClient({
   };
 
   // ---------- BOM List (S.NO / Qty / Unit / Description / Drawing No. / Material Qty+Desc / Rev / Remark) ----------
-  const BOM_COLS = ["s_no","qty","unit","description","drawing_no","material_qty","material_description","rev","remark"] as const;
-  type BomDraftRow = {
-    s_no:string; qty:string; unit:string; description:string; drawing_no:string;
-    material_qty:string; material_description:string; rev:string; remark:string;
-  };
-  const emptyBomDraftRow = (): BomDraftRow => ({
-    s_no:"", qty:"1", unit:"", description:"", drawing_no:"",
-    material_qty:"", material_description:"", rev:"", remark:"",
-  });
+type BomDraftRow = {
+  s_no:string; qty:string; unit:string; description:string; part_no:string; remark:string;
+};
+const emptyBomDraftRow = (): BomDraftRow => ({
+  s_no:"", qty:"1", unit:"", description:"", part_no:"", remark:"",
+});
   const [bomItems, setBomItems] = useState(initialBomItems);
   const [bomDraftRows, setBomDraftRows] = useState<BomDraftRow[]>([emptyBomDraftRow()]);
   const [savingBomList, setSavingBomList] = useState(false);
