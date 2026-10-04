@@ -33,8 +33,6 @@ export default function WODetailClient({
   const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist"|"bom">("prod");
   const todayStr = today();
   const canManage = role === "admin" || role === "manager";
-  // إضافة/تعديل/حذف بنود BOM: المدير بس. باقي الأقسام يصرفوا بس
-  const canManageBom = role === "manager";
 
   // ---------- المنتجات القياسية المربوطة بالأوردر ----------
   const [woProducts, setWoProducts] = useState(initialWoProducts);
@@ -222,6 +220,7 @@ export default function WODetailClient({
         material_description: r.material_description.trim() || null,
         rev: r.rev.trim() || null,
         remark: r.remark.trim() || null,
+        // department متحطة تلقائي من الـ trigger حسب قسم اليوزر
       }));
     if (rowsToInsert.length === 0) return;
     setSavingBomList(true);
@@ -325,7 +324,7 @@ export default function WODetailClient({
   ] as const;
 
   return (
-    <div className="flex flex-col min-h-screen p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => router.back()} className="eg-btn-ghost text-sm px-3 py-2">
@@ -425,8 +424,8 @@ export default function WODetailClient({
         ))}
       </div>
 
-      {/* Tab content — بياخد باقي المساحة المتاحة في الشاشة */}
-      <div className="eg-card overflow-x-auto flex-1 flex flex-col">
+      {/* Tab content */}
+      <div className="eg-card overflow-x-auto">
         {activeTab === "prod" && (
           productivity.length ? (
             <table className="eg-table">
@@ -604,10 +603,9 @@ export default function WODetailClient({
             {department ? (
               <p className="text-xs text-subtext">
                 بنود الـ BOM الخاصة بقسمك ({department}) فقط{role === "manager" ? " — وأنت كمدير تشوف كل الأقسام" : ""}.
-                {!canManageBom && " يمكنك صرف الكميات فقط."}
               </p>
             ) : (
-              <p className="text-xs text-warning">قسمك غير محدد.</p>
+              <p className="text-xs text-warning">قسمك غير محدد، لن تتمكن من إضافة بنود جديدة.</p>
             )}
 
             {bomItems.length > 0 && (
@@ -641,7 +639,7 @@ export default function WODetailClient({
                             className="text-success disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
                             صرف
                           </button>
-                          {canManageBom && (
+                          {canManage && (
                             <>
                               <button onClick={() => openEditBomItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
                               <button onClick={() => removeBomItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
@@ -656,7 +654,7 @@ export default function WODetailClient({
             )}
             {bomItems.length === 0 && <EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" />}
 
-            {canManageBom && (
+            {canManage && (
               <div className="space-y-2">
                 <p className="text-xs text-subtext">
                   الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Drawing No., Material Qty, Material Description, Rev, Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
