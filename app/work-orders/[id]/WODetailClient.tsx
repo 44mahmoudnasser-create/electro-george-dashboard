@@ -325,7 +325,7 @@ export default function WODetailClient({
   ] as const;
 
   return (
-    <div className="flex flex-col min-h-screen p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+    <div className="flex flex-col h-full p-4 md:p-6 max-w-4xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => router.back()} className="eg-btn-ghost text-sm px-3 py-2">
