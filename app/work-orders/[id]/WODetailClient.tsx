@@ -426,7 +426,7 @@ export default function WODetailClient({
       </div>
 
       {/* Tab content — بياخد باقي المساحة المتاحة في الشاشة */}
-      <div className="eg-card overflow-x-auto flex-1 flex flex-col">
+      <div className="eg-card overflow-y-auto flex-1 flex flex-col min-h-0">
         {activeTab === "prod" && (
           productivity.length ? (
             <table className="eg-table">
