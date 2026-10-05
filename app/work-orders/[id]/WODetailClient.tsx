@@ -71,21 +71,41 @@ export default function WODetailClient({
   const [editProdItem, setEditProdItem] = useState<any>(null);
   const [editProdForm, setEditProdForm] = useState<DraftRow>(emptyDraftRow());
 
-  const PROD_CHECKS = [
-    { key: "chk_sheet",    label: "الصاج" },
-    { key: "chk_paint",    label: "الدهان" },
-    { key: "chk_assembly", label: "التجميع" },
-  ] as const;
+const PROD_STAGES = [
+  { key: "sheet",    col: "qty_sheet",    label: "الصاج" },
+  { key: "paint",    col: "qty_paint",    label: "الدهان" },
+  { key: "assembly", col: "qty_assembly", label: "التجميع" },
+] as const;
 
-  const toggleProdCheck = async (itemId: number, key: string, value: boolean) => {
-    setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: value } : it));
-    const { error } = await supabase.from("wo_production_items").update({ [key]: value }).eq("id", itemId);
-    if (error) {
-      alert(error.message);
-      setProdItems(prev => prev.map((it:any) => it.id === itemId ? { ...it, [key]: !value } : it));
-    }
-  };
 
+const [logStage, setLogStage] = useState<{ item: any; stage: "sheet"|"paint"|"assembly" } | null>(null);
+const [logQty, setLogQty] = useState("");
+const [logging, setLogging] = useState(false);
+
+const openLogStage = (item: any, stage: "sheet"|"paint"|"assembly") => {
+  setLogStage({ item, stage });
+  setLogQty("");
+};
+
+const submitLogStage = async () => {
+  if (!logStage) return;
+  const q = parseFloat(logQty);
+  if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+  setLogging(true);
+  const { error } = await supabase.rpc("log_production", {
+    p_item_id: logStage.item.id,
+    p_stage: logStage.stage,
+    p_qty: q,
+    p_note: null,
+  });
+  setLogging(false);
+  if (error) { alert(error.message); return; }
+  const col = `qty_${logStage.stage}`;
+  setProdItems(prev => prev.map((it:any) =>
+    it.id === logStage.item.id ? { ...it, [col]: (it[col] ?? 0) + q } : it
+  ));
+  setLogStage(null);
+};
   const handleGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
     if (!text.includes("\t") && !text.includes("\n")) return;
@@ -548,7 +568,7 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
               <table className="eg-table">
                 <thead><tr>
                   <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
-                  {PROD_CHECKS.map(c => <th key={c.key}>{c.label}</th>)}
+                  {PROD_STAGES.map(s => <th key={s.key}>{s.label}</th>)}
                   {role === "admin" && <th>إجراءات</th>}
                 </tr></thead>
                 <tbody>{prodItems.map((it:any) => (
@@ -558,21 +578,31 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
                     <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                     <td>{it.sheet_steel ?? "—"}</td>
                     <td>{it.thickness ?? "—"}</td>
-                    {PROD_CHECKS.map(c => (
-                      <td key={c.key} className="text-center">
-                        <input type="checkbox" checked={!!it[c.key]}
-                          onChange={e => toggleProdCheck(it.id, c.key, e.target.checked)}
-                          className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                      </td>
-                    ))}
-                    {role === "admin" && (
-                      <td>
-                        <div className="flex gap-2">
-                          <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
-                          <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
-                        </div>
-                      </td>
-                    )}
+                    {PROD_STAGES.map(s => {
+  const produced = it[s.col] ?? 0;
+  const remaining = (it.qty ?? 0) - produced;
+  return (
+    <td key={s.key} className="text-center whitespace-nowrap">
+      <div className="flex flex-col items-center gap-1">
+        <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
+          {produced} / {it.qty}
+        </span>
+        <button onClick={() => openLogStage(it, s.key)} disabled={remaining <= 0}
+          className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
+          تسجيل
+        </button>
+      </div>
+    </td>
+  );
+})}
+                    {role === "manager" && (
+  <td>
+    <div className="flex gap-2">
+      <button onClick={() => openEditProdItem(it)} ...>تعديل</button>
+      <button onClick={() => removeProdItem(it.id)} ...>حذف</button>
+    </div>
+  </td>
+)}
                   </tr>
                 ))}</tbody>
               </table>
@@ -802,6 +832,27 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
           </div>
         )}
       </Modal>
+      <Modal open={!!logStage} onClose={() => setLogStage(null)} title="📝 تسجيل إنتاج">
+  {logStage && (
+    <div className="space-y-4">
+      <div className="bg-card2 rounded-lg p-3 text-sm">
+        <p className="text-text font-medium">{logStage.item.description}</p>
+        <p className="text-subtext text-xs mt-1">
+          المرحلة: {PROD_STAGES.find(s => s.key === logStage.stage)?.label} —
+          المنتج: {logStage.item[`qty_${logStage.stage}`] ?? 0} / {logStage.item.qty}
+        </p>
+      </div>
+      <div>
+        <label className="eg-label">الكمية المنجزة</label>
+        <input type="number" min="0.01" step="any" value={logQty}
+          onChange={e => setLogQty(e.target.value)} className="eg-input" autoFocus />
+      </div>
+      <button onClick={submitLogStage} disabled={logging} className="eg-btn-success w-full justify-center">
+        {logging ? "جاري التسجيل..." : "✅ تأكيد التسجيل"}
+      </button>
+    </div>
+  )}
+</Modal>
     </div>
   );
 }
