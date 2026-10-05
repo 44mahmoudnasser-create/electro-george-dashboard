@@ -580,23 +580,29 @@ export default function WODetailClient({
                     <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                     <td>{it.sheet_steel ?? "—"}</td>
                     <td>{it.thickness ?? "—"}</td>
-                    {PROD_STAGES.map(s => {
-                      const produced = it[s.col] ?? 0;
-                      const remaining = (it.qty ?? 0) - produced;
-                      return (
-                        <td key={s.key} className="text-center whitespace-nowrap">
-                          <div className="flex flex-col items-center gap-1">
-                            <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
-                              {produced} / {it.qty}
-                            </span>
-                            <button onClick={() => openLogStage(it, s.key)} disabled={remaining <= 0}
-                              className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-                              تسجيل
-                            </button>
-                          </div>
-                        </td>
-                      );
-                    })}
+                    {PROD_STAGES.map((s, idx) => {
+  const produced = it[s.col] ?? 0;
+  const remaining = (it.qty ?? 0) - produced;
+  const prevStage = PROD_STAGES[idx - 1];
+  const availableFromPrev = prevStage ? (it[prevStage.col] ?? 0) - produced : Infinity;
+  const canLog = remaining > 0 && availableFromPrev > 0;
+  return (
+    <td key={s.key} className="text-center whitespace-nowrap">
+      <div className="flex flex-col items-center gap-1">
+        <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
+          {produced} / {it.qty}
+        </span>
+        <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
+          className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
+          تسجيل
+        </button>
+        {!canLog && remaining > 0 && (
+          <span className="text-warning text-[10px]">بانتظار {prevStage?.label}</span>
+        )}
+      </div>
+    </td>
+  );
+})}
                     {canManageLists && (
                       <td>
                         <div className="flex gap-2">
