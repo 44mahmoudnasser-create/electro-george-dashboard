@@ -12,6 +12,36 @@ import { today } from "@/lib/utils";
 const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
 const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
 
+// بيقسم نص Excel المنسوخ إلى صفوف وخلايا، مع احترام الخلايا اللي بين علامتي تنصيص
+// وبتحتوي على أسطر جديدة (\n) جواها من غير ما يعتبرها صفوف منفصلة
+const parseExcelClipboard = (input: string): string[][] => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  let i = 0;
+  const clean = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  while (i < clean.length) {
+    const ch = clean[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (clean[i + 1] === '"') { cell += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      cell += ch; i++; continue;
+    }
+    if (ch === '"') { inQuotes = true; i++; continue; }
+    if (ch === "\t") { row.push(cell); cell = ""; i++; continue; }
+    if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
+    cell += ch; i++;
+  }
+  row.push(cell);
+  if (row.length > 1 || row[0] !== "") rows.push(row);
+
+  return rows;
+};
+
 export default function WODetailClient({
   wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, initialBomItems, role, department,
 }: {
@@ -32,9 +62,8 @@ export default function WODetailClient({
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist"|"bom">("prod");
   const todayStr = today();
-  const canManage = role === "admin" || role === "manager";
-  // إضافة/تعديل/حذف بنود BOM: المدير بس. باقي الأقسام يصرفوا بس
-  const canManageBom = role === "manager";
+  // إضافة/تعديل/حذف بنود BOM وقائمة الإنتاج: المدير بس. باقي الأقسام يسجلوا/يصرفوا بس
+  const canManageLists = role === "manager";
 
   // ---------- المنتجات القياسية المربوطة بالأوردر ----------
   const [woProducts, setWoProducts] = useState(initialWoProducts);
@@ -71,50 +100,50 @@ export default function WODetailClient({
   const [editProdItem, setEditProdItem] = useState<any>(null);
   const [editProdForm, setEditProdForm] = useState<DraftRow>(emptyDraftRow());
 
-const PROD_STAGES = [
-  { key: "sheet",    col: "qty_sheet",    label: "الصاج" },
-  { key: "paint",    col: "qty_paint",    label: "الدهان" },
-  { key: "assembly", col: "qty_assembly", label: "التجميع" },
-] as const;
+  // مراحل الإنتاج: كل مرحلة بتتسجل بكمية + تاريخ + مين (بدل checkbox بسيط)
+  const PROD_STAGES = [
+    { key: "sheet",    col: "qty_sheet",    label: "الصاج" },
+    { key: "paint",    col: "qty_paint",    label: "الدهان" },
+    { key: "assembly", col: "qty_assembly", label: "التجميع" },
+  ] as const;
 
+  const [logStage, setLogStage] = useState<{ item: any; stage: "sheet"|"paint"|"assembly" } | null>(null);
+  const [logQty, setLogQty] = useState("");
+  const [logging, setLogging] = useState(false);
 
-const [logStage, setLogStage] = useState<{ item: any; stage: "sheet"|"paint"|"assembly" } | null>(null);
-const [logQty, setLogQty] = useState("");
-const [logging, setLogging] = useState(false);
+  const openLogStage = (item: any, stage: "sheet"|"paint"|"assembly") => {
+    setLogStage({ item, stage });
+    setLogQty("");
+  };
 
-const openLogStage = (item: any, stage: "sheet"|"paint"|"assembly") => {
-  setLogStage({ item, stage });
-  setLogQty("");
-};
+  const submitLogStage = async () => {
+    if (!logStage) return;
+    const q = parseFloat(logQty);
+    if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+    setLogging(true);
+    const { error } = await supabase.rpc("log_production", {
+      p_item_id: logStage.item.id,
+      p_stage: logStage.stage,
+      p_qty: q,
+      p_note: null,
+    });
+    setLogging(false);
+    if (error) { alert(error.message); return; }
+    const col = `qty_${logStage.stage}`;
+    setProdItems(prev => prev.map((it:any) =>
+      it.id === logStage.item.id ? { ...it, [col]: (it[col] ?? 0) + q } : it
+    ));
+    setLogStage(null);
+  };
 
-const submitLogStage = async () => {
-  if (!logStage) return;
-  const q = parseFloat(logQty);
-  if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
-  setLogging(true);
-  const { error } = await supabase.rpc("log_production", {
-    p_item_id: logStage.item.id,
-    p_stage: logStage.stage,
-    p_qty: q,
-    p_note: null,
-  });
-  setLogging(false);
-  if (error) { alert(error.message); return; }
-  const col = `qty_${logStage.stage}`;
-  setProdItems(prev => prev.map((it:any) =>
-    it.id === logStage.item.id ? { ...it, [col]: (it[col] ?? 0) + q } : it
-  ));
-  setLogStage(null);
-};
   const handleGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
     if (!text.includes("\t") && !text.includes("\n")) return;
     e.preventDefault();
-    const lines = text.replace(/\r/g, "").split("\n").filter((l, i, arr) => !(i === arr.length - 1 && l === ""));
+    const lines = parseExcelClipboard(text);
     setDraftRows(prev => {
       const updated = [...prev];
-      lines.forEach((line, i) => {
-        const cells = line.split("\t");
+      lines.forEach((cells, i) => {
         const targetIdx = rowIdx + i;
         while (updated.length <= targetIdx) updated.push(emptyDraftRow());
         const row = { ...updated[targetIdx] };
@@ -199,58 +228,27 @@ const submitLogStage = async () => {
   const [dispenseQty, setDispenseQty] = useState("");
   const [dispensing, setDispensing] = useState(false);
 
-const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
-  const text = e.clipboardData.getData("text");
-  if (!text.includes("\t") && !text.includes("\n")) return;
-  e.preventDefault();
-
-  // بيقسم نص Excel المنسوخ إلى صفوف وخلايا، مع احترام الخلايا اللي بين علامتي تنصيص
-  // وبتحتوي على أسطر جديدة (\n) جواها من غير ما يعتبرها صفوف منفصلة
-  const parseExcelClipboard = (input: string): string[][] => {
-    const rows: string[][] = [];
-    let row: string[] = [];
-    let cell = "";
-    let inQuotes = false;
-    let i = 0;
-    const clean = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-    while (i < clean.length) {
-      const ch = clean[i];
-      if (inQuotes) {
-        if (ch === '"') {
-          if (clean[i + 1] === '"') { cell += '"'; i += 2; continue; } // "" جوه quotes = " واحدة
-          inQuotes = false; i++; continue;
-        }
-        cell += ch; i++; continue;
-      }
-      if (ch === '"') { inQuotes = true; i++; continue; }
-      if (ch === "\t") { row.push(cell); cell = ""; i++; continue; }
-      if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; i++; continue; }
-      cell += ch; i++;
-    }
-    row.push(cell);
-    if (row.length > 1 || row[0] !== "") rows.push(row);
-
-    return rows;
+  const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("\t") && !text.includes("\n")) return;
+    e.preventDefault();
+    const lines = parseExcelClipboard(text);
+    setBomDraftRows(prev => {
+      const updated = [...prev];
+      lines.forEach((cells, i) => {
+        const targetIdx = rowIdx + i;
+        while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
+        const row = { ...updated[targetIdx] };
+        cells.forEach((val, j) => {
+          const col = BOM_COLS[colIdx + j];
+          if (col) (row as any)[col] = val.trim();
+        });
+        updated[targetIdx] = row;
+      });
+      return updated;
+    });
   };
 
-  const lines = parseExcelClipboard(text);
-
-  setBomDraftRows(prev => {
-    const updated = [...prev];
-    lines.forEach((cells, i) => {
-      const targetIdx = rowIdx + i;
-      while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
-      const row = { ...updated[targetIdx] };
-      cells.forEach((val, j) => {
-        const col = BOM_COLS[colIdx + j];
-        if (col) (row as any)[col] = val.trim();
-      });
-      updated[targetIdx] = row;
-    });
-    return updated;
-  });
-};
   const updateBomDraftRow = (idx: number, patch: Partial<BomDraftRow>) =>
     setBomDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
   const addBomDraftRow = () => setBomDraftRows(prev => [...prev, emptyBomDraftRow()]);
@@ -565,58 +563,67 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
         {activeTab === "prodlist" && (
           <div className="space-y-5">
             {prodItems.length > 0 && (
-              <table className="eg-table">
+              <table className="eg-table w-full table-fixed">
                 <thead><tr>
-                  <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th>
-                  {PROD_STAGES.map(s => <th key={s.key}>{s.label}</th>)}
-                  {role === "admin" && <th>إجراءات</th>}
+                  <th className="w-16">Qty</th>
+                  <th className="w-auto">Description</th>
+                  <th className="w-28">Part No.</th>
+                  <th className="w-28">Sheet Steel</th>
+                  <th className="w-24">Thickness</th>
+                  {PROD_STAGES.map(s => <th key={s.key} className="w-32">{s.label}</th>)}
+                  {canManageLists && <th className="w-24">إجراءات</th>}
                 </tr></thead>
                 <tbody>{prodItems.map((it:any) => (
                   <tr key={it.id}>
                     <td>{it.qty}</td>
-                    <td className="text-text">{it.description}</td>
+                    <td className="text-text whitespace-normal break-words">{it.description}</td>
                     <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                     <td>{it.sheet_steel ?? "—"}</td>
                     <td>{it.thickness ?? "—"}</td>
                     {PROD_STAGES.map(s => {
-  const produced = it[s.col] ?? 0;
-  const remaining = (it.qty ?? 0) - produced;
-  return (
-    <td key={s.key} className="text-center whitespace-nowrap">
-      <div className="flex flex-col items-center gap-1">
-        <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
-          {produced} / {it.qty}
-        </span>
-        <button onClick={() => openLogStage(it, s.key)} disabled={remaining <= 0}
-          className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-          تسجيل
-        </button>
-      </div>
-    </td>
-  );
-})}
-                    {role === "manager" && (
-  <td>
-    <div className="flex gap-2">
-      <button onClick={() => openEditProdItem(it)} ...>تعديل</button>
-      <button onClick={() => removeProdItem(it.id)} ...>حذف</button>
-    </div>
-  </td>
-)}
+                      const produced = it[s.col] ?? 0;
+                      const remaining = (it.qty ?? 0) - produced;
+                      return (
+                        <td key={s.key} className="text-center whitespace-nowrap">
+                          <div className="flex flex-col items-center gap-1">
+                            <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
+                              {produced} / {it.qty}
+                            </span>
+                            <button onClick={() => openLogStage(it, s.key)} disabled={remaining <= 0}
+                              className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
+                              تسجيل
+                            </button>
+                          </div>
+                        </td>
+                      );
+                    })}
+                    {canManageLists && (
+                      <td>
+                        <div className="flex gap-2">
+                          <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
+                          <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}</tbody>
               </table>
             )}
 
-            {role === "admin" && (
+            {canManageLists && (
               <div className="space-y-2">
                 <p className="text-xs text-subtext">
                   الصق البنود مباشرة من إكسل (Qty, Description, Part No., Sheet Steel, Thickness) في أي خانة، أو اكتبها يدويًا.
                 </p>
-                <div className="overflow-x-auto border border-border rounded-lg">
-                  <table className="eg-table">
+                <div className="border border-border rounded-lg">
+                  <table className="eg-table w-full table-fixed">
                     <thead><tr>
-                      <th>Qty</th><th>Description</th><th>Part No.</th><th>Sheet Steel</th><th>Thickness</th><th></th>
+                      <th className="w-16">Qty</th>
+                      <th className="w-auto">Description</th>
+                      <th className="w-28">Part No.</th>
+                      <th className="w-28">Sheet Steel</th>
+                      <th className="w-24">Thickness</th>
+                      <th className="w-8"></th>
                     </tr></thead>
                     <tbody>
                       {draftRows.map((row, rIdx) => (
@@ -653,26 +660,26 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
             {department ? (
               <p className="text-xs text-subtext">
                 بنود الـ BOM الخاصة بقسمك ({department}) فقط{role === "manager" ? " — وأنت كمدير تشوف كل الأقسام" : ""}.
-                {!canManageBom && " يمكنك صرف الكميات فقط."}
+                {!canManageLists && " يمكنك صرف الكميات فقط."}
               </p>
             ) : (
               <p className="text-xs text-warning">قسمك غير محدد.</p>
             )}
 
             {bomItems.length > 0 && (
-  <table className="eg-table w-full table-fixed">
-    <thead><tr>
-      <th className="w-14">S.NO.</th>
-      <th className="w-16">Qty.</th>
-      <th className="w-16">Unit</th>
-      <th className="w-auto">Description</th>
-      <th className="w-28">Part No.</th>
-      <th className="w-32">Rem.</th>
-      <th className="w-20">القسم</th>
-      <th className="w-20">المنصرف</th>
-      <th className="w-20">المتبقي</th>
-      <th className="w-32">إجراءات</th>
-    </tr></thead>
+              <table className="eg-table w-full table-fixed">
+                <thead><tr>
+                  <th className="w-14">S.NO.</th>
+                  <th className="w-16">Qty.</th>
+                  <th className="w-16">Unit</th>
+                  <th className="w-auto">Description</th>
+                  <th className="w-28">Part No.</th>
+                  <th className="w-32">Rem.</th>
+                  <th className="w-20">القسم</th>
+                  <th className="w-20">المنصرف</th>
+                  <th className="w-20">المتبقي</th>
+                  <th className="w-32">إجراءات</th>
+                </tr></thead>
                 <tbody>{bomItems.map((it:any) => {
                   const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
                   return (
@@ -680,7 +687,7 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
                       <td>{it.s_no ?? "—"}</td>
                       <td>{it.qty}</td>
                       <td>{it.unit ?? "—"}</td>
-<td className="text-text whitespace-normal break-words">{it.description}</td>
+                      <td className="text-text whitespace-normal break-words">{it.description}</td>
                       <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
                       <td>{it.remark ?? "—"}</td>
                       <td><Badge label={it.department} /></td>
@@ -694,7 +701,7 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
                             className="text-success disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
                             صرف
                           </button>
-                          {canManageBom && (
+                          {canManageLists && (
                             <>
                               <button onClick={() => openEditBomItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
                               <button onClick={() => removeBomItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
@@ -709,22 +716,22 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
             )}
             {bomItems.length === 0 && <EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" />}
 
-            {canManageBom && (
+            {canManageLists && (
               <div className="space-y-2">
                 <p className="text-xs text-subtext">
                   الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Part No., Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
                 </p>
                 <div className="border border-border rounded-lg">
-  <table className="eg-table w-full table-fixed">
-    <thead><tr>
-      <th className="w-14">S.NO.</th>
-      <th className="w-16">Qty.</th>
-      <th className="w-16">Unit</th>
-      <th className="w-auto">Description</th>
-      <th className="w-28">Part No.</th>
-      <th className="w-32">Rem.</th>
-      <th className="w-8"></th>
-    </tr></thead>
+                  <table className="eg-table w-full table-fixed">
+                    <thead><tr>
+                      <th className="w-14">S.NO.</th>
+                      <th className="w-16">Qty.</th>
+                      <th className="w-16">Unit</th>
+                      <th className="w-auto">Description</th>
+                      <th className="w-28">Part No.</th>
+                      <th className="w-32">Rem.</th>
+                      <th className="w-8"></th>
+                    </tr></thead>
                     <tbody>
                       {bomDraftRows.map((row, rIdx) => (
                         <tr key={rIdx}>
@@ -832,27 +839,29 @@ const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number,
           </div>
         )}
       </Modal>
+
+      {/* تسجيل إنتاج لمرحلة (صاج/دهان/تجميع) */}
       <Modal open={!!logStage} onClose={() => setLogStage(null)} title="📝 تسجيل إنتاج">
-  {logStage && (
-    <div className="space-y-4">
-      <div className="bg-card2 rounded-lg p-3 text-sm">
-        <p className="text-text font-medium">{logStage.item.description}</p>
-        <p className="text-subtext text-xs mt-1">
-          المرحلة: {PROD_STAGES.find(s => s.key === logStage.stage)?.label} —
-          المنتج: {logStage.item[`qty_${logStage.stage}`] ?? 0} / {logStage.item.qty}
-        </p>
-      </div>
-      <div>
-        <label className="eg-label">الكمية المنجزة</label>
-        <input type="number" min="0.01" step="any" value={logQty}
-          onChange={e => setLogQty(e.target.value)} className="eg-input" autoFocus />
-      </div>
-      <button onClick={submitLogStage} disabled={logging} className="eg-btn-success w-full justify-center">
-        {logging ? "جاري التسجيل..." : "✅ تأكيد التسجيل"}
-      </button>
-    </div>
-  )}
-</Modal>
+        {logStage && (
+          <div className="space-y-4">
+            <div className="bg-card2 rounded-lg p-3 text-sm">
+              <p className="text-text font-medium">{logStage.item.description}</p>
+              <p className="text-subtext text-xs mt-1">
+                المرحلة: {PROD_STAGES.find(s => s.key === logStage.stage)?.label} —
+                المنتج: {logStage.item[`qty_${logStage.stage}`] ?? 0} / {logStage.item.qty}
+              </p>
+            </div>
+            <div>
+              <label className="eg-label">الكمية المنجزة</label>
+              <input type="number" min="0.01" step="any" value={logQty}
+                onChange={e => setLogQty(e.target.value)} className="eg-input" autoFocus />
+            </div>
+            <button onClick={submitLogStage} disabled={logging} className="eg-btn-success w-full justify-center">
+              {logging ? "جاري التسجيل..." : "✅ تأكيد التسجيل"}
+            </button>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
