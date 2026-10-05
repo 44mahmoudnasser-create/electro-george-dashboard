@@ -7,35 +7,33 @@ export const dynamic = "force-dynamic";
 
 export default async function AttendancePage() {
   const supabase = createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user, role, department } = await getUserRole();
   if (!user) redirect("/login");
 
-  const { data: appUser } = await supabase
-    .from("app_users")
-    .select("role, department")
-    .eq("id", user.id)
-    .single();
-
-  const role = appUser?.role ?? "secretary";
-  const department = appUser?.department ?? null;
   const isManager = role === "manager";
 
-  // لو manager، هات كل الفنيين + قايمة الأقسام المتاحة
   let techQuery = supabase.from("technicians").select("*").order("name");
   if (!isManager) {
     techQuery = techQuery.eq("department", department);
   }
-
   const { data: technicians } = await techQuery;
 
-  // قايمة الأقسام (بس لو manager محتاجها للـ selector)
   let departments: string[] = [];
   if (isManager) {
     const { data: deptRows } = await supabase
       .from("technicians")
       .select("department")
       .not("department", "is", null);
-departments = Array.from(new Set((deptRows ?? []).map(d => d.department))).sort();  }
+    departments = Array.from(new Set((deptRows ?? []).map(d => d.department))).sort();
+  }
+
+  // سنة كاملة من بيانات الحضور (أساس حساب إحصائيات الشهر والسنة)
+  const yearStr = new Date().getFullYear().toString();
+  const { data: yearAttendance } = await supabase
+    .from("attendance")
+    .select("tech_id, date, status")
+    .gte("date", `${yearStr}-01-01`)
+    .lte("date", `${yearStr}-12-31`);
 
   return (
     <AppShell role={role}>
@@ -45,6 +43,7 @@ departments = Array.from(new Set((deptRows ?? []).map(d => d.department))).sort(
         department={department}
         isManager={isManager}
         departments={departments}
+        initialYearAttendance={yearAttendance ?? []}
       />
     </AppShell>
   );
