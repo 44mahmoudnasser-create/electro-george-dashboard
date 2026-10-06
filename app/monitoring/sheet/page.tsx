@@ -19,10 +19,13 @@ export default async function SheetMonitoringPage() {
     .from("wo_production_items")
     .select("id, work_order_id, qty, description, part_no, sheet_steel, thickness, qty_sheet, work_order:work_orders(wo_number, status)")
     .order("id", { ascending: true });
-const itemIds = (items ?? []).map(it => it.id);
-const { data: substages } = itemIds.length
-  ? await supabase.from("wo_item_substages").select("*").in("production_item_id", itemIds)
-  : { data: [] };
+
+  // المراحل الفرعية الاختيارية (بانش/مقص/تني/لحام) للبنود دي بس
+  const itemIds = (items ?? []).map(it => it.id);
+  const { data: substages } = itemIds.length
+    ? await supabase.from("wo_item_substages").select("*").in("production_item_id", itemIds)
+    : { data: [] };
+
   const { data: machines } = await supabase
     .from("machines")
     .select("*")
@@ -41,6 +44,7 @@ const { data: substages } = itemIds.length
       <SheetMonitoringClient
         initialItems={items ?? []}
         initialMachines={machines ?? []}
+        initialSubstages={substages ?? []}
         machineRequired={!!settingRow?.value}
         role={role}
       />
