@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import EmptyState from "@/components/ui/EmptyState";
 import Modal from "@/components/ui/Modal";
-import { Search, Settings, Plus } from "lucide-react";
+import { Search, Settings, Plus, ChevronDown, ChevronUp } from "lucide-react";
 
 type QueueItem = {
   id: number;
@@ -18,24 +18,34 @@ type QueueItem = {
 };
 
 type Machine = { id: number; name: string; department: string; notes: string | null; active: boolean };
+type Substage = { id: number; production_item_id: number; stage: string; qty_done: number };
 
 const getWoNumber = (it: QueueItem) =>
   Array.isArray(it.work_order) ? it.work_order[0]?.wo_number : it.work_order?.wo_number;
-const getWoStatus = (it: QueueItem) =>
-  Array.isArray(it.work_order) ? it.work_order[0]?.status : it.work_order?.status;
+
+// مراحل التصنيع الداخلية — اختيارية، خاصة بمتابعة قسم الصاج بس، وبتختلف من بارت للتاني
+const SUBSTAGES = [
+  { key: "punch", label: "البانش" },
+  { key: "cut",   label: "المقص" },
+  { key: "bend",  label: "التني" },
+  { key: "weld",  label: "اللحام" },
+] as const;
 
 export default function SheetMonitoringClient({
-  initialItems, initialMachines, machineRequired, role,
+  initialItems, initialMachines, initialSubstages, machineRequired, role,
 }: {
-  initialItems: QueueItem[]; initialMachines: Machine[]; machineRequired: boolean; role: string;
+  initialItems: QueueItem[]; initialMachines: Machine[]; initialSubstages: Substage[];
+  machineRequired: boolean; role: string;
 }) {
   const [items, setItems] = useState(initialItems);
   const [machines, setMachines] = useState(initialMachines);
+  const [substages, setSubstages] = useState(initialSubstages);
   const [search, setSearch] = useState("");
   const [woFilter, setWoFilter] = useState("الكل");
   const [materialFilter, setMaterialFilter] = useState("الكل");
   const [thicknessFilter, setThicknessFilter] = useState("الكل");
   const [machinesOpen, setMachinesOpen] = useState(false);
+  const [expandedItem, setExpandedItem] = useState<number | null>(null);
 
   // ---------- Queue: البنود اللي لسه الصاج ماخلصهاش (remaining > 0) ----------
   const queue = useMemo(() => items.filter(it => (it.qty ?? 0) - (it.qty_sheet ?? 0) > 0), [items]);
@@ -64,7 +74,13 @@ export default function SheetMonitoringClient({
     return true;
   }), [queue, woFilter, materialFilter, thicknessFilter, search]);
 
-  // ---------- تسجيل إنتاج ----------
+  const substagesFor = (itemId: number) =>
+    SUBSTAGES.map(s => ({
+      ...s,
+      qty_done: substages.find(x => x.production_item_id === itemId && x.stage === s.key)?.qty_done ?? 0,
+    }));
+
+  // ---------- تسجيل الإنتاج الأساسي (بيحدد qty_sheet، بيفتح الدهان) ----------
   const [logItem, setLogItem] = useState<QueueItem | null>(null);
   const [logQty, setLogQty] = useState("");
   const [logMachineId, setLogMachineId] = useState("");
@@ -95,6 +111,32 @@ export default function SheetMonitoringClient({
       it.id === logItem.id ? { ...it, qty_sheet: (it.qty_sheet ?? 0) + q } : it
     ));
     setLogItem(null);
+  };
+
+  // ---------- تسجيل المراحل الفرعية (اختياري، للمتابعة الداخلية بس) ----------
+  const [subQty, setSubQty] = useState<Record<string, string>>({}); // key = `${itemId}-${stage}`
+  const [subSaving, setSubSaving] = useState<string | null>(null);
+
+  const submitSubstage = async (itemId: number, stage: string, targetQty: number) => {
+    const k = `${itemId}-${stage}`;
+    const q = parseFloat(subQty[k] ?? "");
+    if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+    setSubSaving(k);
+    const { error } = await supabase.rpc("log_substage", {
+      p_item_id: itemId, p_stage: stage, p_qty: q,
+    });
+    setSubSaving(null);
+    if (error) { alert(error.message); return; }
+    setSubstages(prev => {
+      const idx = prev.findIndex(x => x.production_item_id === itemId && x.stage === stage);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty_done: next[idx].qty_done + q };
+        return next;
+      }
+      return [...prev, { id: Date.now(), production_item_id: itemId, stage, qty_done: q }];
+    });
+    setSubQty(prev => ({ ...prev, [k]: "" }));
   };
 
   // ---------- إدارة المكن ----------
@@ -174,30 +216,74 @@ export default function SheetMonitoringClient({
             <th className="w-24">Part No.</th>
             <th className="w-24">الخامة</th>
             <th className="w-20">السُمك</th>
-            <th className="w-24">المطلوب</th>
-            <th className="w-24">المنتج</th>
-            <th className="w-24">المتبقي</th>
+            <th className="w-20">المطلوب</th>
+            <th className="w-20">المنتج</th>
+            <th className="w-20">المتبقي</th>
             <th className="w-24">إجراء</th>
+            <th className="w-10"></th>
           </tr></thead>
           <tbody>
             {filtered.map(it => {
               const remaining = (it.qty ?? 0) - (it.qty_sheet ?? 0);
+              const isExpanded = expandedItem === it.id;
               return (
-                <tr key={it.id}>
-                  <td className="font-mono text-accent">{getWoNumber(it) ?? "—"}</td>
-                  <td className="text-text whitespace-normal break-words">{it.description}</td>
-                  <td className="font-mono">{it.part_no ?? "—"}</td>
-                  <td>{it.sheet_steel ?? "—"}</td>
-                  <td>{it.thickness ?? "—"}</td>
-                  <td>{it.qty}</td>
-                  <td className="text-text font-medium">{it.qty_sheet ?? 0}</td>
-                  <td className="text-warning font-bold">{remaining}</td>
-                  <td>
-                    <button onClick={() => openLog(it)} className="eg-btn-primary text-xs !py-1.5">
-                      تسجيل
-                    </button>
-                  </td>
-                </tr>
+                <>
+                  <tr key={it.id}>
+                    <td className="font-mono text-accent">{getWoNumber(it) ?? "—"}</td>
+                    <td className="text-text whitespace-normal break-words">{it.description}</td>
+                    <td className="font-mono">{it.part_no ?? "—"}</td>
+                    <td>{it.sheet_steel ?? "—"}</td>
+                    <td>{it.thickness ?? "—"}</td>
+                    <td>{it.qty}</td>
+                    <td className="text-text font-medium">{it.qty_sheet ?? 0}</td>
+                    <td className="text-warning font-bold">{remaining}</td>
+                    <td>
+                      <button onClick={() => openLog(it)} className="eg-btn-primary text-xs !py-1.5">
+                        تسجيل
+                      </button>
+                    </td>
+                    <td>
+                      <button onClick={() => setExpandedItem(isExpanded ? null : it.id)}
+                        className="text-subtext hover:text-text" title="تفاصيل مراحل التصنيع (اختياري)">
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={10} className="bg-card2/40 p-3">
+                        <p className="text-xs text-subtext mb-2">
+                          متابعة داخلية اختيارية لمراحل التصنيع (خاصة بالصاج فقط) — مش مرتبطة بفتح الدهان، وملهاش ترتيب إجباري، ومش كل بارت لازم يمر بيها كلها.
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {substagesFor(it.id).map(s => {
+                            const k = `${it.id}-${s.key}`;
+                            return (
+                              <div key={s.key} className="bg-card rounded-lg p-2 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-medium text-text">{s.label}</span>
+                                  <span className="text-xs text-subtext">{s.qty_done} / {it.qty}</span>
+                                </div>
+                                <div className="flex gap-1">
+                                  <input type="number" min="0.01" step="any"
+                                    value={subQty[k] ?? ""}
+                                    onChange={e => setSubQty(prev => ({ ...prev, [k]: e.target.value }))}
+                                    className="eg-input !py-1 !text-xs flex-1" placeholder="كمية" />
+                                  <button
+                                    onClick={() => submitSubstage(it.id, s.key, it.qty)}
+                                    disabled={subSaving === k}
+                                    className="eg-btn-ghost !py-1 !px-2 text-xs">
+                                    {subSaving === k ? "..." : "+"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
               );
             })}
           </tbody>
@@ -205,7 +291,7 @@ export default function SheetMonitoringClient({
         {filtered.length === 0 && <EmptyState message="لا توجد بنود متبقية مطابقة للفلتر" />}
       </div>
 
-      {/* مودال تسجيل الإنتاج */}
+      {/* مودال تسجيل الإنتاج الأساسي */}
       <Modal open={!!logItem} onClose={() => setLogItem(null)} title="📝 تسجيل إنتاج صاج">
         {logItem && (
           <div className="space-y-4">
