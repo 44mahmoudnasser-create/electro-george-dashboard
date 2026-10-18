@@ -92,8 +92,8 @@ export default function WODetailClient({
 
   // ---------- قائمة إنتاج الأمر (Qty / Description / Part No. / Sheet Steel / Thickness) ----------
   const PROD_COLS = ["qty","description","part_no","sheet_steel","thickness"] as const;
-  type DraftRow = { qty:string; description:string; part_no:string; sheet_steel:string; thickness:string };
-  const emptyDraftRow = (): DraftRow => ({ qty:"1", description:"", part_no:"", sheet_steel:"", thickness:"" });
+  type DraftRow = { qty:string; description:string; part_no:string; sheet_steel:string; thickness:string; required_painting:"YES"|"NA" };
+  const emptyDraftRow = (): DraftRow => ({ qty:"1", description:"", part_no:"", sheet_steel:"", thickness:"", required_painting:"YES" });
   const [prodItems, setProdItems] = useState(initialProdItems);
   const [draftRows, setDraftRows] = useState<DraftRow[]>([emptyDraftRow()]);
   const [savingProdList, setSavingProdList] = useState(false);
@@ -172,6 +172,7 @@ export default function WODetailClient({
         part_no: r.part_no.trim() || null,
         sheet_steel: r.sheet_steel.trim() || null,
         thickness: r.thickness.trim() || null,
+        required_painting: r.required_painting,
       }));
     if (rowsToInsert.length === 0) return;
     setSavingProdList(true);
@@ -187,6 +188,7 @@ export default function WODetailClient({
     setEditProdForm({
       qty: String(item.qty), description: item.description,
       part_no: item.part_no ?? "", sheet_steel: item.sheet_steel ?? "", thickness: item.thickness ?? "",
+      required_painting: item.required_painting ?? "YES",
     });
   };
 
@@ -198,6 +200,7 @@ export default function WODetailClient({
       part_no: editProdForm.part_no.trim() || null,
       sheet_steel: editProdForm.sheet_steel.trim() || null,
       thickness: editProdForm.thickness.trim() || null,
+      required_painting: editProdForm.required_painting,
     };
     const { error } = await supabase.from("wo_production_items").update(payload).eq("id", editProdItem.id);
     if (error) { alert(error.message); return; }
@@ -570,49 +573,79 @@ export default function WODetailClient({
                   <th className="w-28">Part No.</th>
                   <th className="w-28">Sheet Steel</th>
                   <th className="w-24">Thickness</th>
-                  {PROD_STAGES.map(s => <th key={s.key} className="w-32">{s.label}</th>)}
+                  {PROD_STAGES.filter(s => s.key !== "paint").map(s => <th key={s.key} className="w-32">{s.label}</th>)}
+                  <th className="w-32">الدهان</th>
                   {canManageLists && <th className="w-24">إجراءات</th>}
                 </tr></thead>
-                <tbody>{prodItems.map((it:any) => (
-                  <tr key={it.id}>
-                    <td>{it.qty}</td>
-                    <td className="text-text whitespace-normal break-words">{it.description}</td>
-                    <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
-                    <td>{it.sheet_steel ?? "—"}</td>
-                    <td>{it.thickness ?? "—"}</td>
-                    {PROD_STAGES.map((s, idx) => {
-  const produced = it[s.col] ?? 0;
-  const remaining = (it.qty ?? 0) - produced;
-  const prevStage = PROD_STAGES[idx - 1];
-  const availableFromPrev = prevStage ? (it[prevStage.col] ?? 0) - produced : Infinity;
-  const canLog = remaining > 0 && availableFromPrev > 0;
-  return (
-    <td key={s.key} className="text-center whitespace-nowrap">
-      <div className="flex flex-col items-center gap-1">
-        <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
-          {produced} / {it.qty}
-        </span>
-        <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
-          className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-          تسجيل
-        </button>
-        {!canLog && remaining > 0 && (
-          <span className="text-warning text-[10px]">بانتظار {prevStage?.label}</span>
-        )}
-      </div>
-    </td>
-  );
-})}
-                    {canManageLists && (
-                      <td>
-                        <div className="flex gap-2">
-                          <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
-                          <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
-                        </div>
+                <tbody>{prodItems.map((it:any) => {
+                  const needsPaint = it.required_painting !== "NA";
+                  return (
+                    <tr key={it.id}>
+                      <td>{it.qty}</td>
+                      <td className="text-text whitespace-normal break-words">{it.description}</td>
+                      <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
+                      <td>{it.sheet_steel ?? "—"}</td>
+                      <td>{it.thickness ?? "—"}</td>
+                      {PROD_STAGES.filter(s => s.key !== "paint").map(s => {
+                        const produced = it[s.col] ?? 0;
+                        const remaining = (it.qty ?? 0) - produced;
+                        // التجميع بياخد من الدهان عادةً، أو من الصاج مباشرة لو البند NA (بدون دهان)
+                        const prevKey = s.key === "assembly" ? (needsPaint ? "paint" : "sheet") : undefined;
+                        const prevStage = PROD_STAGES.find(x => x.key === prevKey);
+                        const availableFromPrev = prevStage ? (it[prevStage.col] ?? 0) - produced : Infinity;
+                        const canLog = remaining > 0 && availableFromPrev > 0;
+                        return (
+                          <td key={s.key} className="text-center whitespace-nowrap">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
+                                {produced} / {it.qty}
+                              </span>
+                              <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
+                                className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
+                                تسجيل
+                              </button>
+                              {!canLog && remaining > 0 && prevStage && (
+                                <span className="text-warning text-[10px]">بانتظار {prevStage.label}</span>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                      <td className="text-center whitespace-nowrap">
+                        {!needsPaint ? (
+                          <span className="text-xs text-subtext">NA</span>
+                        ) : (() => {
+                          const produced = it.qty_paint ?? 0;
+                          const remaining = (it.qty ?? 0) - produced;
+                          const availableFromSheet = (it.qty_sheet ?? 0) - produced;
+                          const canLog = remaining > 0 && availableFromSheet > 0;
+                          return (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
+                                {produced} / {it.qty}
+                              </span>
+                              <button onClick={() => openLogStage(it, "paint")} disabled={!canLog}
+                                className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
+                                تسجيل
+                              </button>
+                              {!canLog && remaining > 0 && (
+                                <span className="text-warning text-[10px]">بانتظار الصاج</span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
-                    )}
-                  </tr>
-                ))}</tbody>
+                      {canManageLists && (
+                        <td>
+                          <div className="flex gap-2">
+                            <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
+                            <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}</tbody>
               </table>
             )}
 
@@ -629,6 +662,7 @@ export default function WODetailClient({
                       <th className="w-28">Part No.</th>
                       <th className="w-28">Sheet Steel</th>
                       <th className="w-24">Thickness</th>
+                      <th className="w-32">الدهان</th>
                       <th className="w-8"></th>
                     </tr></thead>
                     <tbody>
@@ -642,6 +676,14 @@ export default function WODetailClient({
                                 className="eg-input !py-1 !text-sm" />
                             </td>
                           ))}
+                          <td>
+                            <select value={row.required_painting}
+                              onChange={e => updateDraftRow(rIdx, { required_painting: e.target.value as "YES"|"NA" })}
+                              className="eg-select !py-1 !text-sm">
+                              <option value="YES">يدخل دهان</option>
+                              <option value="NA">بدون دهان (NA)</option>
+                            </select>
+                          </td>
                           <td>
                             <button onClick={() => removeDraftRow(rIdx)} className="text-danger/60 hover:text-danger text-xs">✕</button>
                           </td>
@@ -790,6 +832,15 @@ export default function WODetailClient({
             <div><label className="eg-label">Thickness</label>
               <input value={editProdForm.thickness}
                 onChange={e=>setEditProdForm(f=>({...f,thickness:e.target.value}))} className="eg-input" /></div>
+          </div>
+          <div>
+            <label className="eg-label">الدهان</label>
+            <select value={editProdForm.required_painting}
+              onChange={e=>setEditProdForm(f=>({...f,required_painting:e.target.value as "YES"|"NA"}))}
+              className="eg-select">
+              <option value="YES">يدخل دهان</option>
+              <option value="NA">بدون دهان (NA)</option>
+            </select>
           </div>
         </div>
         <button onClick={submitEditProdItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
