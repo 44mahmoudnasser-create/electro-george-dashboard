@@ -29,47 +29,42 @@ export default function TechniciansClient({
   const [filterGrade, setFilterGrade] = useState("الكل");
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [form, setForm] = useState({
-    name: "", grade: "فني" as typeof GRADES[number], route: "",
-    skill_ids: [] as number[],
+    name: "", grade: "فني" as typeof GRADES[number], route: "", skill_ids: [] as number[],
   });
 
-  const filtered = useMemo(() =>
-    techs.filter(t =>
-      (!search || t.name.includes(search) || (t.route ?? "").includes(search)) &&
-      (filterGrade === "الكل" || t.grade === filterGrade)
-    ), [techs, search, filterGrade]);
+  const filtered = useMemo(() => techs.filter(t =>
+    (!search || t.name.includes(search) || (t.route ?? "").includes(search)) &&
+    (filterGrade === "الكل" || t.grade === filterGrade)
+  ), [techs, search, filterGrade]);
+
+  const skillNames = (t: TechRow) =>
+    (t.tech_skills ?? []).map(ts => ts.skills?.skill_name).filter(Boolean) as string[];
 
   const toggleSkill = (id: number) =>
     setForm(f => ({
       ...f,
-      skill_ids: f.skill_ids.includes(id)
-        ? f.skill_ids.filter(x => x !== id)
-        : [...f.skill_ids, id],
+      skill_ids: f.skill_ids.includes(id) ? f.skill_ids.filter(x => x !== id) : [...f.skill_ids, id],
     }));
 
-  const resetForm = () =>
-    setForm({ name: "", grade: "فني", route: "", skill_ids: [] });
+  const resetForm = () => setForm({ name: "", grade: "فني", route: "", skill_ids: [] });
 
   const addTech = async () => {
     if (!form.name.trim()) return;
-    setSaving(true);
-    const { data, error } = await supabase
+    setSaving(true); setError("");
+    const { data, error: e1 } = await supabase
       .from("technicians")
-      .insert({
-        name: form.name,
-        grade: form.grade,
-        route: form.route,
-        department, // بياخد قسم اليوزر تلقائي، مش قيمة من الفورم
-      })
+      .insert({ name: form.name.trim(), grade: form.grade, route: form.route, department })
       .select()
       .single();
-    if (error) { alert(error.message); setSaving(false); return; }
+    if (e1) { setSaving(false); setError(e1.message); return; }
 
     if (form.skill_ids.length > 0) {
-      await supabase.from("tech_skills").insert(
+      const { error: e2 } = await supabase.from("tech_skills").insert(
         form.skill_ids.map(skill_id => ({ tech_id: data.id, skill_id }))
       );
+      if (e2) { setSaving(false); setError(e2.message); return; }
     }
     const skills = allSkills.filter(s => form.skill_ids.includes(s.id));
     setTechs(prev => [{
@@ -79,63 +74,72 @@ export default function TechniciansClient({
     setAddOpen(false); resetForm(); setSaving(false);
   };
 
-  const getSkillNames = (t: TechRow) =>
-    (t.tech_skills ?? []).map(ts => ts.skills?.skill_name).filter(Boolean).join("، ");
-
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-xl font-bold text-text">👷 الفنيين</h1>
-        {true && (
-          <button onClick={() => setAddOpen(true)} className="eg-btn-primary">
-            <Plus className="w-4 h-4" />إضافة فني
-          </button>
-        )}
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2">
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-subtext" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            className="eg-input pr-9 w-48" placeholder="بحث بالاسم أو خط السير" />
+    <div className="max-w-5xl mx-auto">
+      {/* شريط علوي ثابت */}
+      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-bold text-text">الفنيين</h1>
+            <span className="text-xs text-subtext tabular-nums">{filtered.length} / {techs.length}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtext" />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                className="eg-input !py-1.5 !text-xs pr-8 w-44" placeholder="بحث بالاسم أو خط السير" />
+            </div>
+            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
+              className="eg-select !py-1.5 !text-xs w-28">
+              <option>الكل</option>
+              {GRADES.map(g => <option key={g}>{g}</option>)}
+            </select>
+            <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
+              <Plus className="w-3.5 h-3.5" />إضافة فني
+            </button>
+          </div>
         </div>
-        <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)} className="eg-select w-36">
-          <option>الكل</option>
-          {GRADES.map(g => <option key={g}>{g}</option>)}
-        </select>
       </div>
 
-      {/* Grid of cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map(t => (
-          <button key={t.id}
-            onClick={() => router.push(`/technicians/${t.id}`)}
-            className="eg-card text-right hover:border-accent/40 transition-all cursor-pointer group">
-            <div className="flex items-start justify-between mb-3">
-              <ChevronLeft className="w-4 h-4 text-subtext group-hover:text-accent transition-colors mt-1" />
-              <div>
-                <p className="font-bold text-text text-base">{t.name}</p>
-                <p className="text-xs text-subtext mt-0.5">{t.route ?? "—"}</p>
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-2 flex-wrap">
-              <Badge label={t.grade ?? "فني"} />
-            </div>
-            {getSkillNames(t) && (
-              <p className="text-xs text-subtext mt-2 line-clamp-1 text-right">
-                🔧 {getSkillNames(t)}
-              </p>
-            )}
-          </button>
-        ))}
-        {filtered.length === 0 && (
-          <div className="col-span-3"><EmptyState message="لا يوجد فنيين" /></div>
-        )}
+      <div className="p-4 md:p-6">
+        <div className="eg-card !p-0 overflow-hidden">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-card2 text-subtext text-xs">
+                <th className="px-4 py-2 text-right font-semibold">الاسم</th>
+                <th className="px-3 py-2 text-right font-semibold w-40">خط السير</th>
+                <th className="px-3 py-2 text-right font-semibold w-24">الدرجة</th>
+                <th className="px-3 py-2 text-right font-semibold hidden md:table-cell">المهارات</th>
+                <th className="w-10" />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(t => {
+                const skills = skillNames(t);
+                return (
+                  <tr key={t.id} onClick={() => router.push(`/technicians/${t.id}`)}
+                    className="border-t border-border/40 cursor-pointer hover:bg-card2/50 group">
+                    <td className="px-4 py-2 font-medium text-text">{t.name}</td>
+                    <td className="px-3 py-2 text-xs text-subtext">{t.route ?? "—"}</td>
+                    <td className="px-3 py-2"><Badge label={t.grade ?? "فني"} /></td>
+                    <td className="px-3 py-2 text-xs text-subtext hidden md:table-cell">
+                      <span className="line-clamp-1">{skills.length ? skills.join("، ") : "—"}</span>
+                    </td>
+                    <td className="px-3 py-2 text-subtext group-hover:text-accent">
+                      <ChevronLeft className="w-4 h-4" />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState message="لا يوجد فنيين" />}
+        </div>
       </div>
 
-      {/* Add Modal */}
-      <Modal open={addOpen} onClose={() => { setAddOpen(false); resetForm(); }} title="إضافة فني جديد" size="md">
+      {/* مودال الإضافة */}
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); resetForm(); setError(""); }}
+        title="إضافة فني جديد" size="md">
         <div className="space-y-4">
           <div>
             <label className="eg-label">الاسم *</label>
@@ -162,10 +166,8 @@ export default function TechniciansClient({
             <div className="bg-card2 rounded-lg p-3 max-h-40 overflow-y-auto grid grid-cols-2 gap-2">
               {allSkills.map(s => (
                 <label key={s.id} className="flex items-center gap-2 cursor-pointer text-sm text-text">
-                  <input type="checkbox"
-                    checked={form.skill_ids.includes(s.id)}
-                    onChange={() => toggleSkill(s.id)}
-                    className="accent-emerald-500 w-4 h-4" />
+                  <input type="checkbox" checked={form.skill_ids.includes(s.id)}
+                    onChange={() => toggleSkill(s.id)} className="accent-emerald-500 w-4 h-4" />
                   {s.skill_name}
                 </label>
               ))}
@@ -174,8 +176,9 @@ export default function TechniciansClient({
               )}
             </div>
           </div>
-          <button onClick={addTech} disabled={saving} className="eg-btn-primary w-full justify-center">
-            {saving ? "جاري الحفظ..." : "💾 حفظ"}
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <button onClick={addTech} disabled={saving || !form.name.trim()} className="eg-btn-primary w-full justify-center">
+            {saving ? "جاري الحفظ..." : "حفظ"}
           </button>
         </div>
       </Modal>
