@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { Technician } from "@/types";
 import { today } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
-import { Save, RefreshCw, ChevronDown, ChevronUp, Printer, CheckCheck, CalendarCheck } from "lucide-react";
+import { Save, RefreshCw, ChevronDown, ChevronUp, Printer, CalendarCheck } from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 import { cn } from "@/lib/utils";
 
@@ -84,11 +84,22 @@ export default function AttendanceClient({
 
   useEffect(() => { load(); }, [date, selectedDept]);
 
+  // لو فيه تعديلات مش محفوظة، نسأل قبل ما نغيّر اليوم أو القسم علشان ماتضيعش
+  const confirmDiscard = () =>
+    !dirty || window.confirm("فيه تغييرات مش محفوظة. تتجاهل وتكمل؟");
+
+  const changeDate = (value: string) => {
+    if (value === date || !confirmDiscard()) return;
+    setDate(value);
+  };
+
+  const changeDept = (value: string) => {
+    if (value === selectedDept || !confirmDiscard()) return;
+    setSelectedDept(value);
+  };
+
   const setRow = (tech_id: number, patch: Partial<AttRow>) =>
     setRows(prev => prev.map(r => r.tech_id === tech_id ? { ...r, ...patch } : r));
-
-  const markAllPresent = () =>
-    setRows(prev => prev.map(r => ({ ...r, status: "حاضر", permission: "—" })));
 
   /* ─────────── حفظ ─────────── */
   const save = async () => {
@@ -233,16 +244,9 @@ export default function AttendanceClient({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {isManager && (
-              <select value={selectedDept} onChange={e => setSelectedDept(e.target.value)}
-                className="eg-select !py-1.5 !text-xs w-36">
-                <option value="الكل">كل الأقسام</option>
-                {departments.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-            )}
             {tab === "daily" && (
               <>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                <input type="date" value={date} onChange={e => changeDate(e.target.value)}
                   className="eg-input !py-1.5 !text-xs w-36" />
                 <IconBtn onClick={load} disabled={loading} title="تحديث">
                   <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
@@ -270,6 +274,23 @@ export default function AttendanceClient({
             </button>
           ))}
         </div>
+
+        {/* فلتر الأقسام (للمدير بس) */}
+        {isManager && (
+          <div className="flex gap-1.5 flex-wrap mt-2">
+            {["الكل", ...departments].map(d => {
+              const active = selectedDept === d;
+              return (
+                <button key={d} onClick={() => changeDept(d)}
+                  className={cn("px-2.5 py-1 text-[11px] rounded-full border transition-colors",
+                    active ? "bg-accent/15 border-accent/60 text-accent font-semibold"
+                           : "bg-card2 border-border text-subtext hover:text-text")}>
+                  {d === "الكل" ? "كل الأقسام" : d}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="p-4 md:p-6 space-y-4">
@@ -290,11 +311,6 @@ export default function AttendanceClient({
               <Stat label="مأمورية" value={daySummary.mission} tone="accent" />
               <Stat label="إذن" value={daySummary.permission} tone="muted" />
               <Stat label="عمل إضافي" value={daySummary.overtime} tone="muted" />
-              <div className="flex-1" />
-              <button onClick={markAllPresent} disabled={rows.length === 0}
-                className="eg-btn-ghost !py-1 !text-xs disabled:opacity-40">
-                <CheckCheck className="w-3.5 h-3.5" />تحديد الكل حاضر
-              </button>
             </div>
 
             {/* جدول اليوم */}
