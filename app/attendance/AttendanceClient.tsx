@@ -4,7 +4,8 @@ import { supabase } from "@/lib/supabase";
 import { Technician } from "@/types";
 import { today } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
-import { Save, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { Save, RefreshCw, ChevronDown, ChevronUp, Printer } from "lucide-react";
+import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 
 const ATT_OPTS = ["حاضر","غياب","أجازة","مأمورية"];
 const PERM_OPTS = ["—","إذن ساعتين صباحي","إذن ساعتين مسائي","إذن نصف يوم صباحي","إذن نصف يوم مسائي"];
@@ -27,6 +28,7 @@ export default function AttendanceClient({
   const [rows, setRows] = useState<AttRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [yearAttendance, setYearAttendance] = useState<YearAttRow[]>(initialYearAttendance);
   const [statsMonth, setStatsMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
   const [expandedTech, setExpandedTech] = useState<number | null>(null);
@@ -38,6 +40,32 @@ export default function AttendanceClient({
   }, [initialTechnicians, selectedDept, isManager]);
 
   const visibleTechIds = useMemo(() => new Set(visibleTechnicians.map(t => t.id)), [visibleTechnicians]);
+
+  // كشف العمل الإضافي: بيقرأ المتسجلين من الداتابيز (المحفوظين) لليوم ده
+  const printOvertimeForm = async () => {
+    const techIds = visibleTechnicians.map(t => t.id);
+    if (techIds.length === 0) return;
+    setPrinting(true);
+    const { data, error } = await supabase.from("overtime")
+      .select("tech_id").eq("date", date).eq("has_overtime", true).in("tech_id", techIds);
+    if (error) { setPrinting(false); alert(error.message); return; }
+    const otIds = new Set((data ?? []).map(r => r.tech_id));
+    const people = visibleTechnicians
+      .filter(t => otIds.has(t.id))
+      .map(t => ({ name: t.name, route: t.route ?? null, dept: t.department ?? null }));
+    if (people.length === 0) {
+      setPrinting(false);
+      alert("مفيش حد متسجل عمل إضافي في التاريخ ده. لو سجلت دلوقتي احفظ الأول وبعدين اطبع.");
+      return;
+    }
+    try {
+      const blob = await buildOvertimeForm(date, people);
+      downloadBlob(blob, `كشف_عمل_إضافي_${date}.docx`);
+    } catch (e) {
+      alert((e as Error).message);
+    }
+    setPrinting(false);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -179,6 +207,10 @@ export default function AttendanceClient({
           <input type="date" value={date} onChange={e => setDate(e.target.value)} className="eg-input w-44" />
           <button onClick={load} className="eg-btn-ghost" disabled={loading}>
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+          <button onClick={printOvertimeForm} disabled={printing} className="eg-btn-ghost"
+            title="يطبع كشف العمل الإضافي للمتسجلين في التاريخ ده (المحفوظين)">
+            <Printer className="w-4 h-4" />{printing ? "جاري التجهيز..." : "كشف عمل إضافي"}
           </button>
           <button onClick={save} disabled={saving} className="eg-btn-success">
             <Save className="w-4 h-4" />{saving ? "جاري الحفظ..." : "حفظ"}
