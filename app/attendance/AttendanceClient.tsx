@@ -101,25 +101,46 @@ export default function AttendanceClient({
   const setRow = (tech_id: number, patch: Partial<AttRow>) =>
     setRows(prev => prev.map(r => r.tech_id === tech_id ? { ...r, ...patch } : r));
 
-  /* ─────────── حفظ ─────────── */
+  /* ─────────── حفظ: بيبعت بس الصفوف اللي اتغيرت، في طلبات مجمعة ─────────── */
   const save = async () => {
+    const saved = new Map<number, AttRow>(
+      (JSON.parse(savedSnapshot || "[]") as AttRow[]).map(r => [r.tech_id, r])
+    );
+    const changed = rows.filter(r => {
+      const s = saved.get(r.tech_id);
+      return !s || s.status !== r.status || s.permission !== r.permission || s.overtime !== r.overtime;
+    });
+    if (changed.length === 0) {
+      setNotice({ ok: true, text: "مفيش تغييرات تتحفظ" });
+      return;
+    }
+
     setSaving(true);
     try {
-      for (const r of rows) {
-        const { error: e1 } = await supabase.from("attendance")
-          .upsert({ tech_id: r.tech_id, date, status: r.status }, { onConflict: "tech_id,date" });
-        if (e1) throw e1;
-        if (r.permission !== "—") {
-          const { error } = await supabase.from("permissions")
-            .upsert({ tech_id: r.tech_id, date, permission_type: r.permission }, { onConflict: "tech_id,date" });
-          if (error) throw error;
-        } else {
-          await supabase.from("permissions").delete().eq("tech_id", r.tech_id).eq("date", date);
-        }
-        const { error: e3 } = await supabase.from("overtime")
-          .upsert({ tech_id: r.tech_id, date, has_overtime: r.overtime }, { onConflict: "tech_id,date" });
-        if (e3) throw e3;
+      const attRows = changed.map(r => ({ tech_id: r.tech_id, date, status: r.status }));
+      const otRows = changed.map(r => ({ tech_id: r.tech_id, date, has_overtime: r.overtime }));
+      const permUpserts = changed
+        .filter(r => r.permission !== "—")
+        .map(r => ({ tech_id: r.tech_id, date, permission_type: r.permission }));
+      // نحذف الإذن بس للي كان عنده إذن قبل كده وبقى "—"
+      const permDeleteIds = changed
+        .filter(r => r.permission === "—" && saved.get(r.tech_id)?.permission !== "—")
+        .map(r => r.tech_id);
+
+      const ops: PromiseLike<{ error: { message: string } | null }>[] = [
+        supabase.from("attendance").upsert(attRows, { onConflict: "tech_id,date" }),
+        supabase.from("overtime").upsert(otRows, { onConflict: "tech_id,date" }),
+      ];
+      if (permUpserts.length) {
+        ops.push(supabase.from("permissions").upsert(permUpserts, { onConflict: "tech_id,date" }));
       }
+      if (permDeleteIds.length) {
+        ops.push(supabase.from("permissions").delete().in("tech_id", permDeleteIds).eq("date", date));
+      }
+
+      const results = await Promise.all(ops);
+      const failed = results.find(r => r.error);
+      if (failed?.error) throw new Error(failed.error.message);
     } catch (e) {
       setSaving(false);
       setNotice({ ok: false, text: (e as Error).message || "حصل خطأ أثناء الحفظ" });
@@ -131,7 +152,7 @@ export default function AttendanceClient({
     if (date.slice(0, 4) === today().slice(0, 4)) {
       setYearAttendance(prev => {
         const next = [...prev];
-        rows.forEach(r => {
+        changed.forEach(r => {
           const idx = next.findIndex(y => y.tech_id === r.tech_id && y.date === date);
           if (idx >= 0) next[idx] = { ...next[idx], status: r.status };
           else next.push({ tech_id: r.tech_id, date, status: r.status });
@@ -150,7 +171,7 @@ export default function AttendanceClient({
       }),
     }).catch(() => {});
 
-    setNotice({ ok: true, text: "تم الحفظ" });
+    setNotice({ ok: true, text: `تم الحفظ (${changed.length} ${changed.length === 1 ? "فني" : "فنيين"})` });
   };
 
   /* ─────────── كشف العمل الإضافي ─────────── */
