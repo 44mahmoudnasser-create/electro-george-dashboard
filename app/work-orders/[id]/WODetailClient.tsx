@@ -600,10 +600,18 @@ export default function WODetailClient({
                               <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
                                 {produced} / {it.qty}
                               </span>
+                              {s.key === "sheet" && (it.sheet_route?.length ?? 0) > 0 ? (
+                                // البند ليه مسار تصنيع — الصاج بيتحسب تلقائي من صفحة متابعة الصاج
+                                <a href="/monitoring/sheet" className="text-subtext text-[10px] hover:text-accent hover:underline"
+                                  title={`المسار: ${it.sheet_route.join(" ← ")}`}>
+                                  عبر مسار الصاج
+                                </a>
+                              ) : (
                               <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
                                 className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
                                 تسجيل
                               </button>
+                              )}
                               {!canLog && remaining > 0 && prevStage && (
                                 <span className="text-warning text-[10px]">بانتظار {prevStage.label}</span>
                               )}
