@@ -391,8 +391,8 @@ export default function SheetMonitoringClient({
       {/* كروت المراحل */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <StageCard active={view === "total"} onClick={() => setView("total")}
-          title="الإجمالي" main={stats.total.pieces} mainLabel="قطعة متبقية"
-          sub={`${stats.total.items} بند`}
+                    title="الإجمالي" main={stats.total.pieces} mainLabel="قطعة متبقية"
+          second={stats.total.items} secondLabel="بند متبقي"
           extra={stats.total.noRoute > 0 ? <span className="text-warning">{stats.total.noRoute} بدون مسار</span> : null} />
         {STAGES.map(s => {
           const st = stats.perStage[s.key];
@@ -672,18 +672,29 @@ export default function SheetMonitoringClient({
 
 /* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
 
-function StageCard({ active, onClick, title, main, mainLabel, sub, extra }: {
-  active: boolean; onClick: () => void; title: string; main: number; mainLabel: string; sub: string; extra?: React.ReactNode;
+function StageCard({ active, onClick, title, main, mainLabel, second, secondLabel, sub, extra }: {
+  active: boolean; onClick: () => void; title: string; main: number; mainLabel: string;
+  second?: number; secondLabel?: string; sub?: string; extra?: React.ReactNode;
 }) {
   return (
     <button onClick={onClick}
       className={`eg-card !p-4 text-right transition-colors w-full ${active ? "!border-accent ring-1 ring-accent/40" : "hover:!border-border"}`}>
       <div className="flex items-center justify-between">
         <span className={`text-sm font-bold ${active ? "text-accent" : "text-text"}`}>{title}</span>
-        <span className="text-xs text-subtext">{sub}</span>
+        {sub && <span className="text-xs text-subtext">{sub}</span>}
       </div>
-      <div className={`text-2xl font-bold mt-2 ${main > 0 ? "text-warning" : "text-subtext"}`}>{fmt(main)}</div>
-      <div className="text-[11px] text-subtext">{mainLabel}</div>
+      <div className="flex items-end gap-4 mt-2">
+        <div>
+          <div className={`text-2xl font-bold ${main > 0 ? "text-warning" : "text-subtext"}`}>{fmt(main)}</div>
+          <div className="text-[11px] text-subtext">{mainLabel}</div>
+        </div>
+        {second !== undefined && (
+          <div className="border-r border-border pr-4">
+            <div className={`text-2xl font-bold ${second > 0 ? "text-text" : "text-subtext"}`}>{fmt(second)}</div>
+            <div className="text-[11px] text-subtext">{secondLabel}</div>
+          </div>
+        )}
+      </div>
       {extra && <div className="text-[11px] mt-1">{extra}</div>}
     </button>
   );
