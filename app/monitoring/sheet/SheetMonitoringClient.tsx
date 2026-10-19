@@ -399,7 +399,7 @@ export default function SheetMonitoringClient({
           return (
             <StageCard key={s.key} active={view === s.key} onClick={() => setView(s.key)}
               title={s.label} main={st.available} mainLabel="قطعة جاهزة للشغل"
-              sub={`${st.items} بند`}
+              second={st.items} secondLabel="بند جاهز"
               extra={st.waiting > 0 ? <span className="text-subtext">{fmt(st.waiting)} منتظرة مرحلة سابقة</span> : null} />
           );
         })}
