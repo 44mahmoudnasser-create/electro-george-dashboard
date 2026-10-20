@@ -19,6 +19,14 @@ create table if not exists public.tools (
   active        boolean not null default true,
   created_at    timestamptz not null default now()
 );
+-- لو جدول tools اتعمل قبل كده بنسخة أقدم (من migration تاني)، نضيف الأعمدة الناقصة
+alter table public.tools add column if not exists category      text;
+alter table public.tools add column if not exists is_consumable boolean not null default false;
+alter table public.tools add column if not exists unit          text not null default 'عدد';
+alter table public.tools add column if not exists department    text;
+alter table public.tools add column if not exists active        boolean not null default true;
+alter table public.tools add column if not exists created_at    timestamptz not null default now();
+
 create unique index if not exists tools_name_dept_uq on public.tools (name, coalesce(department, ''));
 
 create table if not exists public.tool_items (
