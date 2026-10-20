@@ -454,9 +454,13 @@ export default function WODetailClient({
         <div className="eg-card !p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
-            <span className="text-[11px] text-subtext tabular-nums">
-              {deptRows.filter(d => d.applicable && d.status === "مكتمل").length} / {deptRows.filter(d => d.applicable).length} مكتمل
-            </span>
+            {deptRows.length > 0 ? (
+              <span className="text-[11px] text-subtext tabular-nums">
+                {deptRows.filter(d => d.applicable && d.status === "مكتمل").length} / {deptRows.filter(d => d.applicable).length} مكتمل
+              </span>
+            ) : (
+              <span className="text-[11px] text-warning">مفيش أقسام مربوطة بالأمر (راجع migrations 008 و009)</span>
+            )}
           </div>
           <div className="divide-y divide-border/40">
             {deptRows.map(d => {
