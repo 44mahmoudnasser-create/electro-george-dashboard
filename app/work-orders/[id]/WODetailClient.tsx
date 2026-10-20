@@ -84,6 +84,7 @@ export default function WODetailClient({
   const [delivery, setDelivery] = useState<string>(wo.expected_delivery ?? "");
   const [priority, setPriority] = useState<string>(wo.priority ?? "متوسطة");
   const [planMonth, setPlanMonth] = useState<string>(wo.plan_month ?? "");
+  const [desc, setDesc] = useState<string>(wo.description ?? "");
   const [checks, setChecks] = useState({
     chk_client: !!wo.chk_client, chk_quality: !!wo.chk_quality, chk_assembly: !!wo.chk_assembly,
   });
@@ -102,7 +103,8 @@ export default function WODetailClient({
   const saveInfo = async () => {
     setSaving(true);
     const patch: any = {
-      status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks,
+      status, expected_delivery: delivery || null, priority, plan_month: planMonth || null,
+      description: desc.trim() || null, ...checks,
     };
     if (status === "مكتمل" && !wo.completion_date) patch.completion_date = todayStr;
     const { error } = await supabase.from("work_orders").update(patch).eq("id", wo.id);
@@ -403,6 +405,15 @@ export default function WODetailClient({
               ))}
             </div>
           </div>
+        </div>
+
+        {/* ═══ وصف الأمر ═══ */}
+        <div className="eg-card !p-4">
+          <Field label="وصف الأمر">
+            <textarea rows={3} value={desc}
+              onChange={e => setInfo<string>(setDesc)(e.target.value)}
+              className="eg-input !h-auto py-2 !text-xs" placeholder="المنتج، المطلوب، ملاحظات التنفيذ..." />
+          </Field>
         </div>
 
         {/* ═══ التبويبات ═══ */}

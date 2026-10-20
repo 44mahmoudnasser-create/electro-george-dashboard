@@ -3,8 +3,8 @@ import "./globals.css";
 import RegisterSW from "@/components/RegisterSW";
 
 export const metadata: Metadata = {
-  title: "Electro George — نظام قسم التجميع",
-  description: "نظام متابعة قسم التجميع الميكانيكي",
+  title: "مصنع إلكترو جورج — نظام إدارة المصنع",
+  description: "نظام إدارة المصنع: الصاج والدهان والتجميع والعمالة والعهد وأوامر الشغل",
   manifest: "/manifest.json",
   themeColor: "#000000",
 };

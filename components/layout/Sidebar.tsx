@@ -6,11 +6,20 @@ import { cn } from "@/lib/utils";
 import { LogOut, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { navForRole } from "@/lib/nav";
+import { roleLabel, deptLabel, initials } from "@/lib/roles";
+
+export type CurrentUser = {
+  name: string | null;
+  email: string | null;
+  role: string;
+  department: string | null;
+};
 
 export default function Sidebar({
-  role, open, onClose,
+  role, user, open, onClose,
 }: {
   role: string;
+  user: CurrentUser | null;
   open: boolean;      // بيتحكم فيه الموبايل بس
   onClose: () => void;
 }) {
@@ -34,6 +43,8 @@ export default function Sidebar({
     router.push("/login");
   };
 
+  const displayName = user?.name || user?.email || "—";
+
   return (
     <>
       {/* خلفية داكنة على الموبايل لما الدرج يفتح */}
@@ -47,20 +58,18 @@ export default function Sidebar({
 
       <aside
         className={cn(
-          // الموبايل: درج ثابت من اليمين (RTL) ومخفي لحد ما يتفتح
           "fixed inset-y-0 right-0 z-50 w-64 bg-card flex flex-col border-l border-border/50 transition-transform duration-200",
           open ? "translate-x-0" : "translate-x-full",
-          // الديسكتوب: عمود ثابت في الـ layout
-          "md:static md:z-auto md:w-56 md:min-h-screen md:translate-x-0 md:shrink-0"
+          "md:static md:z-auto md:w-60 md:min-h-screen md:translate-x-0 md:shrink-0"
         )}
       >
         {/* Logo */}
         <div className="p-5 border-b border-border/50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-accent rounded-lg flex items-center justify-center text-white font-bold text-sm">EG</div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 bg-accent rounded-lg flex items-center justify-center text-white font-bold text-sm">EG</div>
             <div>
-              <p className="text-xs font-bold text-accent leading-none">Electro George</p>
-              <p className="text-[10px] text-subtext leading-none mt-0.5">قسم التجميع</p>
+              <p className="text-sm font-bold text-text leading-tight">مصنع إلكترو جورج</p>
+              <p className="text-[10px] text-subtext leading-tight mt-0.5">Electro George Factory</p>
             </div>
           </div>
           <button onClick={onClose} className="md:hidden p-1.5 text-subtext hover:text-text" aria-label="قفل القائمة">
@@ -87,10 +96,21 @@ export default function Sidebar({
           })}
         </nav>
 
-        {/* Logout */}
+        {/* المستخدم الحالي */}
         <div className="p-3 border-t border-border/50">
+          <div className="flex items-center gap-3 px-2 py-2 rounded-lg bg-card2">
+            <div className="w-9 h-9 shrink-0 rounded-full bg-accent/20 text-accent flex items-center justify-center text-xs font-bold">
+              {initials(user?.name, user?.email)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-text truncate">{displayName}</p>
+              <p className="text-[10px] text-subtext truncate">
+                {roleLabel(user?.role ?? role)} · {deptLabel(user?.department)}
+              </p>
+            </div>
+          </div>
           <button onClick={handleLogout}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-subtext hover:bg-danger/10 hover:text-danger w-full transition-all">
+            className="mt-2 flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-subtext hover:bg-danger/10 hover:text-danger w-full transition-all">
             <LogOut className="w-4 h-4" />
             تسجيل الخروج
           </button>

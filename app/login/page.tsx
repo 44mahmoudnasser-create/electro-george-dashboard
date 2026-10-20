@@ -27,8 +27,8 @@ export default function LoginPage() {
           <div className="w-14 h-14 bg-accent rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-accent/20">
             <Zap className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-xl font-bold text-text">Electro George</h1>
-          <p className="text-sm text-subtext mt-1">نظام متابعة قسم التجميع</p>
+          <h1 className="text-xl font-bold text-text">مصنع إلكترو جورج</h1>
+          <p className="text-sm text-subtext mt-1">نظام إدارة المصنع</p>
         </div>
 
         <div className="eg-card">

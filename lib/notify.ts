@@ -113,7 +113,7 @@ export async function notifyDepartment(input: NotifyInput) {
         .join("");
 
       await transporter.sendMail({
-        from: `"Electro George" <${process.env.GMAIL_USER}>`,
+        from: `"Electro George Factory" <${process.env.GMAIL_USER}>`,
         to,
         ...(cc.length ? { cc } : {}),
         subject: title,

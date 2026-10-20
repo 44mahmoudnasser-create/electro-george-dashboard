@@ -1,8 +1,8 @@
 export default function manifest() {
   return {
-    name: "Electro George — نظام قسم التجميع",
-    short_name: "EG",
-    description: "نظام متابعة قسم التجميع الميكانيكي",
+    name: "مصنع إلكترو جورج — نظام إدارة المصنع",
+    short_name: "Electro George",
+    description: "نظام إدارة المصنع: الصاج والدهان والتجميع والعمالة والعهد وأوامر الشغل",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

@@ -19,13 +19,13 @@ const PRIORITY_STYLE: Record<string, string> = {
 };
 
 type WO = {
-  id: number; wo_number: string; status: string; priority: string | null; plan_month: string | null;
+  id: number; wo_number: string; status: string; description: string | null; priority: string | null; plan_month: string | null;
   department: string | null; created_date: string | null; expected_delivery: string | null;
   completion_date: string | null; chk_client: boolean | null; chk_quality: boolean | null; chk_assembly: boolean | null;
 };
 type SortCol = "wo_number" | "status" | "created_date" | "expected_delivery" | "completion_date";
 
-const EMPTY_FORM = { wo_number: "", status: "لم يبدأ", expected_delivery: "", priority: "متوسطة", plan_month: "" };
+const EMPTY_FORM = { wo_number: "", description: "", status: "لم يبدأ", expected_delivery: "", priority: "متوسطة", plan_month: "" };
 
 export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[]; role: string }) {
   const router = useRouter();
@@ -59,7 +59,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
 
   const visible = useMemo(() => {
     const list = wos.filter(w =>
-      (!search || w.wo_number.toLowerCase().includes(search.toLowerCase())) &&
+      (!search || w.wo_number.toLowerCase().includes(search.toLowerCase()) || (w.description ?? "").toLowerCase().includes(search.toLowerCase())) &&
       (filterStatus === "الكل" || (filterStatus === "متأخر" ? isLate(w) : w.status === filterStatus)) &&
       (filterPriority === "الكل" || w.priority === filterPriority) &&
       (!hideDone || !DONE.includes(w.status))
@@ -82,6 +82,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
     const { data, error: e } = await supabase.from("work_orders")
       .insert({
         wo_number: form.wo_number.trim(),
+        description: form.description.trim() || null,
         status: form.status,
         priority: form.priority,
         expected_delivery: form.expected_delivery || null,
@@ -120,7 +121,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
             <div className="relative">
               <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtext" />
               <input value={search} onChange={e => setSearch(e.target.value)}
-                className="eg-input !py-1.5 !text-xs pr-8 w-48" placeholder="بحث برقم الأمر" />
+                className="eg-input !py-1.5 !text-xs pr-8 w-48" placeholder="بحث برقم الأمر أو الوصف" />
             </div>
             <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
               className="eg-select !py-1.5 !text-xs w-32">
@@ -182,7 +183,10 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
                   return (
                     <tr key={w.id} onClick={() => router.push(`${pathname}/${w.id}`)}
                       className="border-t border-border/40 cursor-pointer hover:bg-card2/50 group">
-                      <td className="px-3 py-2 font-mono font-semibold text-accent">{w.wo_number}</td>
+                      <td className="px-3 py-2 max-w-[320px]">
+                        <div className="font-mono font-semibold text-accent">{w.wo_number}</div>
+                        {w.description && <div className="text-[11px] text-subtext truncate">{w.description}</div>}
+                      </td>
                       <td className="px-3 py-2"><Badge label={w.status} /></td>
                       <td className="px-3 py-2">
                         {w.priority ? (
@@ -248,6 +252,12 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
               <input type="month" value={form.plan_month}
                 onChange={e => setForm(f => ({ ...f, plan_month: e.target.value }))} className="eg-input" />
             </div>
+          </div>
+          <div>
+            <label className="eg-label">الوصف</label>
+            <textarea rows={3} value={form.description}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+              className="eg-input !h-auto py-2" placeholder="وصف مختصر لأمر الشغل (المنتج، المطلوب، ملاحظات...)" />
           </div>
           {error && <p className="text-xs text-danger">{error}</p>}
           <button onClick={addWO} disabled={saving || !form.wo_number.trim()} className="eg-btn-primary w-full justify-center">

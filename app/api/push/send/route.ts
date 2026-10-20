@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       const cc = toEmails.length ? ccEmails : [];
 
       await transporter.sendMail({
-        from: `"Electro George" <${process.env.GMAIL_USER}>`,
+        from: `"Electro George Factory" <${process.env.GMAIL_USER}>`,
         to,
         ...(cc.length ? { cc } : {}),
         subject: title,

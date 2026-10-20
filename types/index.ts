@@ -8,7 +8,7 @@ export interface Technician {
   skills?: string[]; department?: string | null;
 }
 export interface WorkOrder {
-  id: number; wo_number: string; status: string;
+  id: number; wo_number: string; status: string; description?: string | null;
   created_date?: string; expected_delivery?: string; completion_date?: string;
   chk_client: boolean; chk_quality: boolean; chk_assembly: boolean;
   department?: string | null;
