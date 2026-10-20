@@ -41,6 +41,7 @@ export default function DashboardClient({
 
   const [month, setMonth] = useState(thisMonth);
   const [statusFilter, setStatusFilter] = useState<string>("الكل");
+  const [scope, setScope] = useState<"plan" | "all">("plan");
   const [list, setList] = useState<WO[]>(wos);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -81,27 +82,40 @@ export default function DashboardClient({
 
   const progressPct = kpi.total ? Math.round((kpi.delivered / kpi.total) * 100) : 0;
 
+  // الجدول بيعرض خطة الشهر أو كل الأوامر حسب الاختيار
+  const base = useMemo(() => (scope === "plan" ? planned : list), [scope, planned, list]);
+
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = {};
     STATUSES.forEach(s => (c[s] = 0));
-    planned.forEach(w => { c[w.status] = (c[w.status] ?? 0) + 1; });
+    base.forEach(w => { c[w.status] = (c[w.status] ?? 0) + 1; });
     return c;
-  }, [planned]);
+  }, [base]);
 
-  const tableRows = useMemo(() => planned
+  // عدد كل الأوامر بكل حالة (بدون فلتر الشهر)
+  const allCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    STATUSES.forEach(s => (c[s] = 0));
+    list.forEach(w => { c[w.status] = (c[w.status] ?? 0) + 1; });
+    return c;
+  }, [list]);
+
+  const overallLate = useMemo(() => list.filter(isLate).length, [list, today]);
+
+  const tableRows = useMemo(() => base
     .filter(w => statusFilter === "الكل" || w.status === statusFilter)
     .sort((a, b) => {
       // المتأخر الأول، بعدين غير المكتمل، بعدين المكتمل
       const rank = (w: WO) => (isLate(w) ? 0 : DONE.includes(w.status) ? 2 : 1);
       if (rank(a) !== rank(b)) return rank(a) - rank(b);
       return (a.expected_delivery ?? "9999").localeCompare(b.expected_delivery ?? "9999");
-    }), [planned, statusFilter, today]);
+    }), [base, statusFilter, today]);
 
   /* ═══════════════ تنبيهات تحتاج قرار ═══════════════ */
   const alerts = useMemo(() => {
     const out: { text: string; tone: "danger" | "warning" | "ok"; href?: string }[] = [];
-    if (kpi.late > 0) out.push({ text: `${kpi.late} أمر شغل متأخر عن موعد التسليم`, tone: "danger" });
-    const stopped = planned.filter(w => w.status === "متوقف").length;
+    if (overallLate > 0) out.push({ text: `${overallLate} أمر شغل متأخر عن موعد التسليم`, tone: "danger" });
+    const stopped = list.filter(w => w.status === "متوقف").length;
     if (stopped > 0) out.push({ text: `${stopped} أمر شغل متوقف`, tone: "warning" });
     const latePurchases = purchaseItems.filter(p => p.status === "مفتوح" && p.supply_date && p.supply_date < today);
     if (latePurchases.length > 0) out.push({ text: `${latePurchases.length} صنف شراء متأخر التوريد`, tone: "warning", href: "/purchases" });
@@ -110,7 +124,7 @@ export default function DashboardClient({
     if (violationsThisMonth > 3) out.push({ text: `${violationsThisMonth} مخالفة هذا الشهر`, tone: "warning", href: "/violations" });
     if (out.length === 0) out.push({ text: "لا توجد تنبيهات تحتاج قرار", tone: "ok" });
     return out;
-  }, [kpi.late, planned, purchaseItems, attendance, violationsThisMonth, today]);
+  }, [overallLate, list, planned, purchaseItems, attendance, violationsThisMonth, today]);
 
   /* ═══════════════ الحضور اليوم ═══════════════ */
   const att = useMemo(() => {
@@ -174,6 +188,28 @@ export default function DashboardClient({
           </div>
         )}
 
+        {/* ═══ كل أوامر الشغل (بدون فلتر الشهر) ═══ */}
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold text-subtext">كل أوامر الشغل</h2>
+            {overallLate > 0 && <span className="text-[11px] text-danger">{overallLate} متأخر</span>}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {STATUSES.map(st => {
+              const n = allCounts[st] ?? 0;
+              const warn = st === "متوقف" && n > 0;
+              return (
+                <button key={st} onClick={() => { setScope("all"); setStatusFilter(st); }}
+                  className={cn("eg-card !p-3 text-right transition-colors hover:border-accent/40",
+                    warn && "!border-warning/50")}>
+                  <div className={cn("text-xl font-bold tabular-nums", warn ? "text-warning" : "text-text")}>{n}</div>
+                  <div className="text-[11px] text-subtext">{st}</div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {/* ═══ الكروت الأساسية (الشهر المختار) ═══ */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Kpi label={`مخطط لـ ${monthLabel}`} value={kpi.total} />
@@ -196,8 +232,17 @@ export default function DashboardClient({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* ═══ جدول الخطة ═══ */}
           <div className="lg:col-span-2 space-y-3">
+            <div className="flex items-center gap-2">
+              {([["plan", `خطة ${monthLabel}`], ["all", "كل الأوامر"]] as const).map(([k, label]) => (
+                <button key={k} onClick={() => { setScope(k); setStatusFilter("الكل"); }}
+                  className={cn("px-3 py-1.5 rounded-md text-xs transition-colors",
+                    scope === k ? "bg-accent/15 text-accent font-semibold" : "text-subtext hover:text-text")}>
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {[{ key: "الكل", n: kpi.total }, ...STATUSES.map(s => ({ key: s, n: statusCounts[s] ?? 0 }))].map(({ key, n }) => (
+              {[{ key: "الكل", n: base.length }, ...STATUSES.map(s => ({ key: s, n: statusCounts[s] ?? 0 }))].map(({ key, n }) => (
                 <button key={key} onClick={() => setStatusFilter(key)}
                   className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap border transition-colors",
                     statusFilter === key ? "bg-accent/15 border-accent/60 text-accent font-semibold"
@@ -260,7 +305,7 @@ export default function DashboardClient({
                     </tbody>
                   </table>
                 </div>
-              ) : <EmptyState message={planned.length ? "لا توجد أوامر بهذه الحالة" : `مفيش أوامر مخططة لـ ${monthLabel}`} />}
+              ) : <EmptyState message={base.length ? "لا توجد أوامر بهذه الحالة" : scope === "plan" ? `مفيش أوامر مخططة لـ ${monthLabel}` : "مفيش أوامر شغل"} />}
             </div>
           </div>
 
