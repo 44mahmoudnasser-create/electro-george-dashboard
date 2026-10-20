@@ -1,5 +1,6 @@
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
+import { OVERTIME_TEMPLATE_B64 } from "./overtime-template";
 
 export type OvertimeFormRow = { name: string; route: string | null; dept: string | null };
 
@@ -18,9 +19,8 @@ const arabicWeekday = (iso: string) => {
 };
 
 export async function buildOvertimeForm(date: string, people: OvertimeFormRow[]): Promise<Blob> {
-  const res = await fetch("/templates/overtime-form-template.docx");
-  if (!res.ok) throw new Error("مش لاقي قالب الكشف");
-  const buf = await res.arrayBuffer();
+  // القالب متضمن جوه الكود، فمفيش fetch ولا ملفات static
+  const buf = Uint8Array.from(atob(OVERTIME_TEMPLATE_B64), c => c.charCodeAt(0));
 
   // نملا الصفوف لحد 25 علشان الكشف يفضل شكله ورقي حتى لو العدد أقل
   const total = Math.max(MIN_ROWS, people.length);

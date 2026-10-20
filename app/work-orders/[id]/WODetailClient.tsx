@@ -1,19 +1,37 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ClipboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { ChevronRight, Save } from "lucide-react";
-import { today } from "@/lib/utils";
+import { ChevronRight, Save, Plus, X, Pencil, Trash2 } from "lucide-react";
+import { today, cn } from "@/lib/utils";
 
-const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
-const PRIORITIES = ["منخفضة","متوسطة","عالية","عاجلة"];
+const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"];
+const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"];
+const DONE = ["مكتمل", "تم التسليم"];
+const PRIORITY_STYLE: Record<string, string> = {
+  "عاجلة": "bg-danger/15 text-danger",
+  "عالية": "bg-warning/15 text-warning",
+  "متوسطة": "bg-accent/15 text-accent",
+  "منخفضة": "bg-card2 text-subtext",
+};
+const CHECKLIST = [
+  { key: "chk_client", label: "استلمه العميل" },
+  { key: "chk_quality", label: "استلمه قسم الجودة" },
+  { key: "chk_assembly", label: "تم الانتهاء من التجميع الكهربي" },
+] as const;
+const PROD_STAGES = [
+  { key: "sheet", col: "qty_sheet", label: "الصاج" },
+  { key: "paint", col: "qty_paint", label: "الدهان" },
+  { key: "assembly", col: "qty_assembly", label: "التجميع" },
+] as const;
+type StageKey = "sheet" | "paint" | "assembly";
+type Tab = "prod" | "files" | "purchases" | "products" | "prodlist" | "bom";
 
-// بيقسم نص Excel المنسوخ إلى صفوف وخلايا، مع احترام الخلايا اللي بين علامتي تنصيص
-// وبتحتوي على أسطر جديدة (\n) جواها من غير ما يعتبرها صفوف منفصلة
+// بيقسم نص Excel المنسوخ لصفوف وخلايا، ويحترم الخلايا اللي فيها أسطر جديدة بين علامتي تنصيص
 const parseExcelClipboard = (input: string): string[][] => {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -21,7 +39,6 @@ const parseExcelClipboard = (input: string): string[][] => {
   let inQuotes = false;
   let i = 0;
   const clean = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
   while (i < clean.length) {
     const ch = clean[i];
     if (inQuotes) {
@@ -38,35 +55,68 @@ const parseExcelClipboard = (input: string): string[][] => {
   }
   row.push(cell);
   if (row.length > 1 || row[0] !== "") rows.push(row);
-
   return rows;
 };
+
+const PROD_COLS = ["qty", "description", "part_no", "sheet_steel", "thickness"] as const;
+type ProdDraft = { qty: string; description: string; part_no: string; sheet_steel: string; thickness: string; required_painting: "YES" | "NA" };
+const emptyProdDraft = (): ProdDraft => ({ qty: "1", description: "", part_no: "", sheet_steel: "", thickness: "", required_painting: "YES" });
+
+const BOM_COLS = ["s_no", "qty", "unit", "description", "part_no", "remark"] as const;
+type BomDraft = { s_no: string; qty: string; unit: string; description: string; part_no: string; remark: string };
+const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", description: "", part_no: "", remark: "" });
+
+const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
   wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, initialBomItems, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  products: { id:number; name:string }[]; initialWoProducts: any[]; initialProdItems: any[];
+  products: { id: number; name: string }[]; initialWoProducts: any[]; initialProdItems: any[];
   initialBomItems: any[]; role: string; department: string | null;
 }) {
   const router = useRouter();
-  const [status, setStatus] = useState(wo.status);
-  const [delivery, setDelivery] = useState(wo.expected_delivery ?? "");
-  const [priority, setPriority] = useState(wo.priority ?? "متوسطة");
-  const [planMonth, setPlanMonth] = useState(wo.plan_month ?? "");
-  const [checks, setChecks] = useState({
-    chk_client: !!wo.chk_client,
-    chk_quality: !!wo.chk_quality,
-    chk_assembly: !!wo.chk_assembly,
-  });
-  const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"prod"|"files"|"purchases"|"products"|"prodlist"|"bom">("prod");
   const todayStr = today();
-  // إضافة/تعديل/حذف بنود BOM وقائمة الإنتاج: المدير بس. باقي الأقسام يسجلوا/يصرفوا بس
   const canManageLists = role === "manager";
 
-  // ---------- المنتجات القياسية المربوطة بالأوردر ----------
-  const [woProducts, setWoProducts] = useState(initialWoProducts);
+  /* ─────────── بيانات الأمر (تعديل) ─────────── */
+  const [status, setStatus] = useState<string>(wo.status);
+  const [delivery, setDelivery] = useState<string>(wo.expected_delivery ?? "");
+  const [priority, setPriority] = useState<string>(wo.priority ?? "متوسطة");
+  const [planMonth, setPlanMonth] = useState<string>(wo.plan_month ?? "");
+  const [checks, setChecks] = useState({
+    chk_client: !!wo.chk_client, chk_quality: !!wo.chk_quality, chk_assembly: !!wo.chk_assembly,
+  });
+  const [dirtyInfo, setDirtyInfo] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [tab, setTab] = useState<Tab>("prod");
+
+  const flash = (ok: boolean, text: string) => {
+    setNotice({ ok, text });
+    setTimeout(() => setNotice(null), 3000);
+  };
+
+  const isLate = !!delivery && delivery < todayStr && !DONE.includes(status);
+
+  const saveInfo = async () => {
+    setSaving(true);
+    const patch: any = {
+      status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks,
+    };
+    if (status === "مكتمل" && !wo.completion_date) patch.completion_date = todayStr;
+    const { error } = await supabase.from("work_orders").update(patch).eq("id", wo.id);
+    setSaving(false);
+    if (error) { flash(false, error.message); return; }
+    setDirtyInfo(false);
+    flash(true, "تم حفظ بيانات الأمر");
+    router.refresh();
+  };
+
+  const setInfo = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirtyInfo(true); };
+
+  /* ─────────── منتجات قياسية مربوطة بالأمر ─────────── */
+  const [woProducts, setWoProducts] = useState<any[]>(initialWoProducts);
   const [addProductId, setAddProductId] = useState("");
   const [addProductQty, setAddProductQty] = useState("1");
   const [savingProduct, setSavingProduct] = useState(false);
@@ -76,67 +126,54 @@ export default function WODetailClient({
     setSavingProduct(true);
     const { data, error } = await supabase.from("work_order_products")
       .insert({ work_order_id: wo.id, standard_product_id: parseInt(addProductId), quantity: parseFloat(addProductQty) || 1 })
-      .select("id, quantity, standard_product:standard_products(id,name)")
-      .single();
+      .select("id, quantity, standard_product:standard_products(id,name)").single();
     setSavingProduct(false);
-    if (error) { alert(error.message); return; }
+    if (error) { flash(false, error.message); return; }
     setWoProducts(prev => [...prev, data]);
     setAddProductId(""); setAddProductQty("1");
   };
 
   const removeProduct = async (linkId: number) => {
-    if (!confirm("حذف هذا المنتج من الأوردر؟")) return;
-    await supabase.from("work_order_products").delete().eq("id", linkId);
-    setWoProducts(prev => prev.filter((p:any) => p.id !== linkId));
+    if (!confirm("حذف هذا المنتج من الأمر؟")) return;
+    const { error } = await supabase.from("work_order_products").delete().eq("id", linkId);
+    if (error) { flash(false, error.message); return; }
+    setWoProducts(prev => prev.filter(p => p.id !== linkId));
   };
 
-  // ---------- قائمة إنتاج الأمر (Qty / Description / Part No. / Sheet Steel / Thickness) ----------
-  const PROD_COLS = ["qty","description","part_no","sheet_steel","thickness"] as const;
-  type DraftRow = { qty:string; description:string; part_no:string; sheet_steel:string; thickness:string; required_painting:"YES"|"NA" };
-  const emptyDraftRow = (): DraftRow => ({ qty:"1", description:"", part_no:"", sheet_steel:"", thickness:"", required_painting:"YES" });
-  const [prodItems, setProdItems] = useState(initialProdItems);
-  const [draftRows, setDraftRows] = useState<DraftRow[]>([emptyDraftRow()]);
+  /* ─────────── قائمة إنتاج الأمر ─────────── */
+  const [prodItems, setProdItems] = useState<any[]>(initialProdItems);
+  const [draftRows, setDraftRows] = useState<ProdDraft[]>([emptyProdDraft()]);
   const [savingProdList, setSavingProdList] = useState(false);
   const [editProdItem, setEditProdItem] = useState<any>(null);
-  const [editProdForm, setEditProdForm] = useState<DraftRow>(emptyDraftRow());
-
-  // مراحل الإنتاج: كل مرحلة بتتسجل بكمية + تاريخ + مين (بدل checkbox بسيط)
-  const PROD_STAGES = [
-    { key: "sheet",    col: "qty_sheet",    label: "الصاج" },
-    { key: "paint",    col: "qty_paint",    label: "الدهان" },
-    { key: "assembly", col: "qty_assembly", label: "التجميع" },
-  ] as const;
-
-  const [logStage, setLogStage] = useState<{ item: any; stage: "sheet"|"paint"|"assembly" } | null>(null);
+  const [editProdForm, setEditProdForm] = useState<ProdDraft>(emptyProdDraft());
+  const [logStage, setLogStage] = useState<{ item: any; stage: StageKey } | null>(null);
   const [logQty, setLogQty] = useState("");
   const [logging, setLogging] = useState(false);
 
-  const openLogStage = (item: any, stage: "sheet"|"paint"|"assembly") => {
-    setLogStage({ item, stage });
-    setLogQty("");
-  };
+  const prodTotals = useMemo(() => {
+    const qty = prodItems.reduce((a, it) => a + (it.qty ?? 0), 0);
+    const sum = (k: string) => prodItems.reduce((a, it) => a + (it[k] ?? 0), 0);
+    return { qty, sheet: sum("qty_sheet"), paint: sum("qty_paint"), assembly: sum("qty_assembly") };
+  }, [prodItems]);
+
+  const openLogStage = (item: any, stage: StageKey) => { setLogStage({ item, stage }); setLogQty(""); };
 
   const submitLogStage = async () => {
     if (!logStage) return;
     const q = parseFloat(logQty);
-    if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+    if (!q || q <= 0) { flash(false, "أدخل كمية صحيحة"); return; }
     setLogging(true);
     const { error } = await supabase.rpc("log_production", {
-      p_item_id: logStage.item.id,
-      p_stage: logStage.stage,
-      p_qty: q,
-      p_note: null,
+      p_item_id: logStage.item.id, p_stage: logStage.stage, p_qty: q, p_note: null,
     });
     setLogging(false);
-    if (error) { alert(error.message); return; }
+    if (error) { flash(false, error.message); return; }
     const col = `qty_${logStage.stage}`;
-    setProdItems(prev => prev.map((it:any) =>
-      it.id === logStage.item.id ? { ...it, [col]: (it[col] ?? 0) + q } : it
-    ));
+    setProdItems(prev => prev.map(it => it.id === logStage.item.id ? { ...it, [col]: (it[col] ?? 0) + q } : it));
     setLogStage(null);
   };
 
-  const handleGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+  const handleProdPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
     if (!text.includes("\t") && !text.includes("\n")) return;
     e.preventDefault();
@@ -144,50 +181,46 @@ export default function WODetailClient({
     setDraftRows(prev => {
       const updated = [...prev];
       lines.forEach((cells, i) => {
-        const targetIdx = rowIdx + i;
-        while (updated.length <= targetIdx) updated.push(emptyDraftRow());
-        const row = { ...updated[targetIdx] };
-        cells.forEach((val, j) => {
-          const col = PROD_COLS[colIdx + j];
-          if (col) (row as any)[col] = val.trim();
-        });
-        updated[targetIdx] = row;
+        const t = rowIdx + i;
+        while (updated.length <= t) updated.push(emptyProdDraft());
+        const row: any = { ...updated[t] };
+        cells.forEach((val, j) => { const c = PROD_COLS[colIdx + j]; if (c) row[c] = val.trim(); });
+        updated[t] = row;
       });
       return updated;
     });
   };
 
-  const updateDraftRow = (idx: number, patch: Partial<DraftRow>) =>
-    setDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
-  const addDraftRow = () => setDraftRows(prev => [...prev, emptyDraftRow()]);
-  const removeDraftRow = (idx: number) => setDraftRows(prev => prev.length > 1 ? prev.filter((_,i) => i !== idx) : [emptyDraftRow()]);
+  const updateProdDraft = (idx: number, patch: Partial<ProdDraft>) =>
+    setDraftRows(prev => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  const removeProdDraft = (idx: number) =>
+    setDraftRows(prev => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : [emptyProdDraft()]));
 
   const saveProdList = async () => {
-    const rowsToInsert = draftRows
-      .filter(r => r.description.trim())
-      .map(r => ({
-        work_order_id: wo.id,
-        qty: parseFloat(r.qty) || 1,
-        description: r.description.trim(),
-        part_no: r.part_no.trim() || null,
-        sheet_steel: r.sheet_steel.trim() || null,
-        thickness: r.thickness.trim() || null,
-        required_painting: r.required_painting,
-      }));
-    if (rowsToInsert.length === 0) return;
+    const rows = draftRows.filter(r => r.description.trim()).map(r => ({
+      work_order_id: wo.id,
+      qty: parseFloat(r.qty) || 1,
+      description: r.description.trim(),
+      part_no: r.part_no.trim() || null,
+      sheet_steel: r.sheet_steel.trim() || null,
+      thickness: r.thickness.trim() || null,
+      required_painting: r.required_painting,
+    }));
+    if (rows.length === 0) return;
     setSavingProdList(true);
-    const { data, error } = await supabase.from("wo_production_items").insert(rowsToInsert).select("*");
+    const { data, error } = await supabase.from("wo_production_items").insert(rows).select("*");
     setSavingProdList(false);
-    if (error) { alert(error.message); return; }
+    if (error) { flash(false, error.message); return; }
     setProdItems(prev => [...prev, ...(data ?? [])]);
-    setDraftRows([emptyDraftRow()]);
+    setDraftRows([emptyProdDraft()]);
+    flash(true, `تم إضافة ${rows.length} بند`);
   };
 
   const openEditProdItem = (item: any) => {
     setEditProdItem(item);
     setEditProdForm({
-      qty: String(item.qty), description: item.description,
-      part_no: item.part_no ?? "", sheet_steel: item.sheet_steel ?? "", thickness: item.thickness ?? "",
+      qty: String(item.qty), description: item.description, part_no: item.part_no ?? "",
+      sheet_steel: item.sheet_steel ?? "", thickness: item.thickness ?? "",
       required_painting: item.required_painting ?? "YES",
     });
   };
@@ -203,35 +236,29 @@ export default function WODetailClient({
       required_painting: editProdForm.required_painting,
     };
     const { error } = await supabase.from("wo_production_items").update(payload).eq("id", editProdItem.id);
-    if (error) { alert(error.message); return; }
-    setProdItems(prev => prev.map((it:any) => it.id === editProdItem.id ? { ...it, ...payload } : it));
+    if (error) { flash(false, error.message); return; }
+    setProdItems(prev => prev.map(it => (it.id === editProdItem.id ? { ...it, ...payload } : it)));
     setEditProdItem(null);
   };
 
   const removeProdItem = async (itemId: number) => {
     if (!confirm("حذف هذا الصف من قائمة الإنتاج؟")) return;
-    await supabase.from("wo_production_items").delete().eq("id", itemId);
-    setProdItems(prev => prev.filter((it:any) => it.id !== itemId));
+    const { error } = await supabase.from("wo_production_items").delete().eq("id", itemId);
+    if (error) { flash(false, error.message); return; }
+    setProdItems(prev => prev.filter(it => it.id !== itemId));
   };
 
-  // ---------- BOM List (S.NO / Qty / Unit / Description / Part No. / Remark) ----------
-  const BOM_COLS = ["s_no","qty","unit","description","part_no","remark"] as const;
-  type BomDraftRow = {
-    s_no:string; qty:string; unit:string; description:string; part_no:string; remark:string;
-  };
-  const emptyBomDraftRow = (): BomDraftRow => ({
-    s_no:"", qty:"1", unit:"", description:"", part_no:"", remark:"",
-  });
-  const [bomItems, setBomItems] = useState(initialBomItems);
-  const [bomDraftRows, setBomDraftRows] = useState<BomDraftRow[]>([emptyBomDraftRow()]);
+  /* ─────────── BOM ─────────── */
+  const [bomItems, setBomItems] = useState<any[]>(initialBomItems);
+  const [bomDraftRows, setBomDraftRows] = useState<BomDraft[]>([emptyBomDraft()]);
   const [savingBomList, setSavingBomList] = useState(false);
   const [editBomItem, setEditBomItem] = useState<any>(null);
-  const [editBomForm, setEditBomForm] = useState<BomDraftRow>(emptyBomDraftRow());
+  const [editBomForm, setEditBomForm] = useState<BomDraft>(emptyBomDraft());
   const [dispenseItem, setDispenseItem] = useState<any>(null);
   const [dispenseQty, setDispenseQty] = useState("");
   const [dispensing, setDispensing] = useState(false);
 
-  const handleBomGridPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+  const handleBomPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
     if (!text.includes("\t") && !text.includes("\n")) return;
     e.preventDefault();
@@ -239,54 +266,46 @@ export default function WODetailClient({
     setBomDraftRows(prev => {
       const updated = [...prev];
       lines.forEach((cells, i) => {
-        const targetIdx = rowIdx + i;
-        while (updated.length <= targetIdx) updated.push(emptyBomDraftRow());
-        const row = { ...updated[targetIdx] };
-        cells.forEach((val, j) => {
-          const col = BOM_COLS[colIdx + j];
-          if (col) (row as any)[col] = val.trim();
-        });
-        updated[targetIdx] = row;
+        const t = rowIdx + i;
+        while (updated.length <= t) updated.push(emptyBomDraft());
+        const row: any = { ...updated[t] };
+        cells.forEach((val, j) => { const c = BOM_COLS[colIdx + j]; if (c) row[c] = val.trim(); });
+        updated[t] = row;
       });
       return updated;
     });
   };
 
-  const updateBomDraftRow = (idx: number, patch: Partial<BomDraftRow>) =>
-    setBomDraftRows(prev => prev.map((r,i) => i === idx ? { ...r, ...patch } : r));
-  const addBomDraftRow = () => setBomDraftRows(prev => [...prev, emptyBomDraftRow()]);
-  const removeBomDraftRow = (idx: number) => setBomDraftRows(prev => prev.length > 1 ? prev.filter((_,i) => i !== idx) : [emptyBomDraftRow()]);
+  const updateBomDraft = (idx: number, patch: Partial<BomDraft>) =>
+    setBomDraftRows(prev => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  const removeBomDraft = (idx: number) =>
+    setBomDraftRows(prev => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : [emptyBomDraft()]));
 
   const saveBomList = async () => {
-    const rowsToInsert = bomDraftRows
-      .filter(r => r.description.trim())
-      .map(r => ({
-        work_order_id: wo.id,
-        s_no: r.s_no.trim() ? parseInt(r.s_no) : null,
-        qty: parseFloat(r.qty) || 1,
-        unit: r.unit.trim() || null,
-        description: r.description.trim(),
-        part_no: r.part_no.trim() || null,
-        remark: r.remark.trim() || null,
-      }));
-    if (rowsToInsert.length === 0) return;
+    const rows = bomDraftRows.filter(r => r.description.trim()).map(r => ({
+      work_order_id: wo.id,
+      s_no: r.s_no.trim() ? parseInt(r.s_no) : null,
+      qty: parseFloat(r.qty) || 1,
+      unit: r.unit.trim() || null,
+      description: r.description.trim(),
+      part_no: r.part_no.trim() || null,
+      remark: r.remark.trim() || null,
+    }));
+    if (rows.length === 0) return;
     setSavingBomList(true);
-    const { data, error } = await supabase.from("wo_bom_items").insert(rowsToInsert).select("*");
+    const { data, error } = await supabase.from("wo_bom_items").insert(rows).select("*");
     setSavingBomList(false);
-    if (error) { alert(error.message); return; }
+    if (error) { flash(false, error.message); return; }
     setBomItems(prev => [...prev, ...(data ?? [])]);
-    setBomDraftRows([emptyBomDraftRow()]);
+    setBomDraftRows([emptyBomDraft()]);
+    flash(true, `تم إضافة ${rows.length} بند`);
   };
 
   const openEditBomItem = (item: any) => {
     setEditBomItem(item);
     setEditBomForm({
-      s_no: item.s_no != null ? String(item.s_no) : "",
-      qty: String(item.qty),
-      unit: item.unit ?? "",
-      description: item.description,
-      part_no: item.part_no ?? "",
-      remark: item.remark ?? "",
+      s_no: item.s_no != null ? String(item.s_no) : "", qty: String(item.qty), unit: item.unit ?? "",
+      description: item.description, part_no: item.part_no ?? "", remark: item.remark ?? "",
     });
   };
 
@@ -301,409 +320,339 @@ export default function WODetailClient({
       remark: editBomForm.remark.trim() || null,
     };
     const { error } = await supabase.from("wo_bom_items").update(payload).eq("id", editBomItem.id);
-    if (error) { alert(error.message); return; }
-    setBomItems(prev => prev.map((it:any) => it.id === editBomItem.id ? { ...it, ...payload } : it));
+    if (error) { flash(false, error.message); return; }
+    setBomItems(prev => prev.map(it => (it.id === editBomItem.id ? { ...it, ...payload } : it)));
     setEditBomItem(null);
   };
 
   const removeBomItem = async (itemId: number) => {
     if (!confirm("حذف هذا البند من الـ BOM؟")) return;
-    await supabase.from("wo_bom_items").delete().eq("id", itemId);
-    setBomItems(prev => prev.filter((it:any) => it.id !== itemId));
-  };
-
-  const openDispense = (item: any) => {
-    setDispenseItem(item);
-    setDispenseQty("");
+    const { error } = await supabase.from("wo_bom_items").delete().eq("id", itemId);
+    if (error) { flash(false, error.message); return; }
+    setBomItems(prev => prev.filter(it => it.id !== itemId));
   };
 
   const submitDispense = async () => {
     if (!dispenseItem) return;
     const q = parseFloat(dispenseQty);
-    if (!q || q <= 0) { alert("أدخل كمية صحيحة"); return; }
+    if (!q || q <= 0) { flash(false, "أدخل كمية صحيحة"); return; }
     setDispensing(true);
     const { error } = await supabase.rpc("dispense_bom_item", {
-      p_bom_item_id: dispenseItem.id,
-      p_qty: q,
-      p_note: null,
+      p_bom_item_id: dispenseItem.id, p_qty: q, p_note: null,
     });
     setDispensing(false);
-    if (error) { alert(error.message); return; }
-    setBomItems(prev => prev.map((it:any) =>
-      it.id === dispenseItem.id ? { ...it, qty_dispensed: (it.qty_dispensed ?? 0) + q } : it
-    ));
+    if (error) { flash(false, error.message); return; }
+    setBomItems(prev => prev.map(it =>
+      it.id === dispenseItem.id ? { ...it, qty_dispensed: (it.qty_dispensed ?? 0) + q } : it));
     setDispenseItem(null);
   };
 
-  const save = async () => {
-    setSaving(true);
-    const patch: any = { status, expected_delivery: delivery || null, priority, plan_month: planMonth || null, ...checks };
-    if (status === "مكتمل" && !wo.completion_date) patch.completion_date = todayStr;
-    await supabase.from("work_orders").update(patch).eq("id", wo.id);
-    setSaving(false);
-    router.refresh();
-  };
+  const getImageUrl = (path: string) => supabase.storage.from("purchases").getPublicUrl(path).data.publicUrl;
 
-  const getImageUrl = (path: string) => {
-    const { data } = supabase.storage.from("purchases").getPublicUrl(path);
-    return data.publicUrl;
-  };
-
-  const CHECKLIST = [
-    { key: "chk_client",   label: "استلمه العميل" },
-    { key: "chk_quality",  label: "استلمه قسم الجودة" },
-    { key: "chk_assembly", label: "تم الانتهاء من التجميع الكهربي" },
-  ] as const;
-
-  const TABS = [
-    { key: "prod",      label: `الإنتاجية (${productivity.length})` },
-    { key: "files",     label: `الملفات (${files.length})` },
-    { key: "purchases", label: `المشتريات (${purchases.length})` },
-    { key: "products",  label: `المنتجات (${woProducts.length})` },
-    { key: "prodlist",  label: `قائمة الإنتاج (${prodItems.length})` },
-    { key: "bom",       label: `BOM (${bomItems.length})` },
-  ] as const;
+  const TABS: { key: Tab; label: string; count: number }[] = [
+    { key: "prod", label: "الإنتاجية", count: productivity.length },
+    { key: "prodlist", label: "قائمة الإنتاج", count: prodItems.length },
+    { key: "bom", label: "BOM", count: bomItems.length },
+    { key: "products", label: "المنتجات", count: woProducts.length },
+    { key: "purchases", label: "المشتريات", count: purchases.length },
+    { key: "files", label: "الملفات", count: files.length },
+  ];
 
   return (
-    <div className="flex flex-col h-full p-4 md:p-6 w-full mx-auto space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => router.back()} className="eg-btn-ghost text-sm px-3 py-2">
-          <ChevronRight className="w-4 h-4" /> أوامر الشغل
-        </button>
-        <div className="flex-1">
-          <h1 className="text-xl font-bold text-text font-mono">{wo.wo_number}</h1>
-          <p className="text-sm text-subtext">أُنشئ: {wo.created_date ?? "—"}</p>
+    <div className="max-w-7xl mx-auto">
+      {/* ═══ الهيدر الثابت ═══ */}
+      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={() => router.push("/work-orders")} className="eg-btn-ghost !py-1.5 !px-2.5 !text-xs">
+            <ChevronRight className="w-3.5 h-3.5" />الأوامر
+          </button>
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-lg font-bold font-mono text-text truncate">{wo.wo_number}</h1>
+            <Badge label={status} />
+            <span className={cn("text-[11px] px-2 py-0.5 rounded", PRIORITY_STYLE[priority] ?? PRIORITY_STYLE["منخفضة"])}>{priority}</span>
+            {isLate && <span className="text-[11px] px-2 py-0.5 rounded bg-danger/15 text-danger font-semibold">متأخر</span>}
+          </div>
+          <div className="flex-1" />
+          {dirtyInfo && <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning">تعديلات غير محفوظة</span>}
+          <button onClick={saveInfo} disabled={saving || !dirtyInfo} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
+            <Save className="w-3.5 h-3.5" />{saving ? "جاري الحفظ..." : "حفظ البيانات"}
+          </button>
         </div>
-        <Badge label={wo.status} />
-        <span className="text-xs px-2 py-1 rounded-full bg-card2 text-text font-medium">⏫ {priority}</span>
+        <p className="text-[11px] text-subtext mt-1.5">
+          أُنشئ {wo.created_date ?? "—"}
+          {" · "}التسليم {delivery || "—"}
+          {" · "}شهر الخطة {planMonth || "—"}
+          {prodItems.length > 0 && <>{" · "}الإنجاز: <span className="text-text tabular-nums">{prodTotals.assembly}/{prodTotals.qty}</span> تجميع</>}
+        </p>
       </div>
 
-      {/* Edit card (admin only) */}
-      {true && (
-        <div className="eg-card space-y-4">
-          <h2 className="font-semibold text-text">✏️ تعديل</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="eg-label">الحالة</label>
-              <select value={status} onChange={e => setStatus(e.target.value)} className="eg-select">
+      <div className="p-4 md:p-6 space-y-4">
+        {notice && (
+          <div className={cn("text-xs px-3 py-2 rounded-lg border",
+            notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
+            {notice.text}
+          </div>
+        )}
+
+        {/* ═══ بيانات الأمر ═══ */}
+        <div className="eg-card !p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Field label="الحالة">
+              <select value={status} onChange={e => setInfo<string>(setStatus)(e.target.value)} className="eg-select !py-1.5 !text-xs">
                 {STATUSES.map(s => <option key={s}>{s}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="eg-label">التسليم المتوقع</label>
-              <input type="date" value={delivery} onChange={e => setDelivery(e.target.value)} className="eg-input" />
-            </div>
-            <div>
-              <label className="eg-label">الأولوية</label>
-              <select value={priority} onChange={e => setPriority(e.target.value)} className="eg-select">
+            </Field>
+            <Field label="الأولوية">
+              <select value={priority} onChange={e => setInfo<string>(setPriority)(e.target.value)} className="eg-select !py-1.5 !text-xs">
                 {PRIORITIES.map(p => <option key={p}>{p}</option>)}
               </select>
+            </Field>
+            <Field label="التسليم المتوقع">
+              <input type="date" value={delivery} onChange={e => setInfo<string>(setDelivery)(e.target.value)}
+                className="eg-input !py-1.5 !text-xs" />
+            </Field>
+            <Field label="شهر الخطة">
+              <input type="month" value={planMonth} onChange={e => setInfo<string>(setPlanMonth)(e.target.value)}
+                className="eg-input !py-1.5 !text-xs" />
+            </Field>
+          </div>
+          <div className="lg:col-span-4">
+            <p className="text-[11px] text-subtext mb-1.5">قائمة التحقق</p>
+            <div className="space-y-1.5">
+              {CHECKLIST.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer text-xs text-text">
+                  <input type="checkbox" checked={checks[key]}
+                    onChange={e => setInfo<boolean>(v => setChecks(c => ({ ...c, [key]: v })))(e.target.checked)}
+                    className="w-4 h-4 accent-emerald-500" />
+                  {label}
+                </label>
+              ))}
             </div>
-            <div>
-              <label className="eg-label">شهر الخطة</label>
-              <input type="month" value={planMonth} onChange={e => setPlanMonth(e.target.value)} className="eg-input" />
-            </div>
           </div>
-
-          {/* Checklist */}
-          <div className="bg-card2 rounded-lg p-4 space-y-3">
-            <p className="text-sm font-semibold text-text">✅ قائمة التحقق</p>
-            {CHECKLIST.map(({ key, label }) => (
-              <label key={key} className="flex items-center gap-3 cursor-pointer">
-                <input type="checkbox"
-                  checked={checks[key]}
-                  onChange={e => setChecks(c => ({ ...c, [key]: e.target.checked }))}
-                  className="w-5 h-5 accent-emerald-500 cursor-pointer" />
-                <span className="text-sm text-text">{label}</span>
-                {checks[key] && <span className="text-success text-xs">✓ تم</span>}
-              </label>
-            ))}
-          </div>
-
-          {/* Info row */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-            {[
-              ["تاريخ الإتمام", wo.completion_date ?? "—"],
-              ["التسليم المتوقع", wo.expected_delivery ?? "—"],
-            ].map(([l, v]) => (
-              <div key={l} className="bg-card2 rounded-lg p-3">
-                <p className="text-subtext text-xs mb-1">{l}</p>
-                <p className={`font-medium ${v !== "—" && wo.expected_delivery && wo.expected_delivery < todayStr && !["مكتمل","تم التسليم"].includes(status) ? "text-danger" : "text-text"}`}>{v}</p>
-              </div>
-            ))}
-          </div>
-
-          <button onClick={save} disabled={saving} className="eg-btn-success w-full justify-center">
-            <Save className="w-4 h-4" />{saving ? "جاري الحفظ..." : "💾 حفظ التعديلات"}
-          </button>
         </div>
-      )}
 
-      {/* Readonly checklist for secretary */}
-      {role !== "admin" && (
-        <div className="eg-card">
-          <p className="text-sm font-semibold text-text mb-3">✅ قائمة التحقق</p>
-          {CHECKLIST.map(({ key, label }) => (
-            <div key={key} className="flex items-center gap-3 py-2 border-b border-border/30 last:border-0">
-              <span>{checks[key] ? "✅" : "⬜"}</span>
-              <span className="text-sm text-text">{label}</span>
-            </div>
+        {/* ═══ التبويبات ═══ */}
+        <div className="flex gap-1 overflow-x-auto">
+          {TABS.map(({ key, label, count }) => (
+            <button key={key} onClick={() => setTab(key)}
+              className={cn("px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors",
+                tab === key ? "bg-accent/15 text-accent font-semibold" : "text-subtext hover:text-text")}>
+              {label} <span className="tabular-nums opacity-70">({count})</span>
+            </button>
           ))}
         </div>
-      )}
 
-      {/* Tabs */}
-      <div className="flex gap-1 overflow-x-auto pb-1">
-        {TABS.map(({ key, label }) => (
-          <button key={key}
-            onClick={() => setActiveTab(key as any)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all
-              ${activeTab === key ? "bg-accent text-white" : "bg-card2 text-subtext hover:text-text"}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content — بياخد باقي المساحة المتاحة في الشاشة */}
-      <div className="eg-card overflow-y-auto flex-1 flex flex-col min-h-0">
-        {activeTab === "prod" && (
-          productivity.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الفني</th><th>التاريخ</th><th>المهمة</th><th>ملاحظات</th></tr></thead>
-              <tbody>{productivity.map((p, i) => (
-                <tr key={i}>
-                  <td className="text-text font-medium">{p.tech_name ?? "—"}</td>
-                  <td className="text-subtext">{p.work_date}</td>
-                  <td className="text-text">{p.task}</td>
-                  <td className="text-subtext">{p.notes ?? "—"}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد سجلات إنتاجية لهذا الأمر" />
+        {/* ═══ الإنتاجية ═══ */}
+        {tab === "prod" && (
+          <DataTable empty="لا توجد سجلات إنتاجية لهذا الأمر"
+            head={["الفني", "التاريخ", "المهمة", "ملاحظات"]}
+            rows={productivity.map(p => [p.tech_name ?? "—", p.work_date, p.task, p.notes ?? "—"])} />
         )}
 
-        {activeTab === "files" && (
-          files.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الملف</th><th>النوع</th><th>استلام</th><th>سُلِّم لـ</th><th>تاريخ التسليم</th></tr></thead>
-              <tbody>{files.map((f, i) => (
-                <tr key={i}>
-                  <td className="text-text">{f.file_name}</td>
-                  <td className="text-subtext">{f.file_type ?? "—"}</td>
-                  <td className="text-subtext">{f.receive_date ?? "—"}</td>
-                  <td className="text-text">{f.supervisor_name ?? "—"}</td>
-                  <td className="text-subtext">{f.delivery_date ?? "—"}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد ملفات" />
+        {/* ═══ الملفات ═══ */}
+        {tab === "files" && (
+          <DataTable empty="لا توجد ملفات"
+            head={["الملف", "النوع", "تاريخ الاستلام", "سُلِّم لـ", "تاريخ التسليم"]}
+            rows={files.map(f => [f.file_name, f.file_type ?? "—", f.receive_date ?? "—", f.supervisor_name ?? "—", f.delivery_date ?? "—"])} />
         )}
 
-        {activeTab === "purchases" && (
+        {/* ═══ المشتريات ═══ */}
+        {tab === "purchases" && (
           purchases.length ? (
-            <table className="eg-table">
-              <thead><tr><th>الصنف</th><th>الكمية</th><th>طلب</th><th>توريد</th><th>الحالة</th><th>صورة</th></tr></thead>
-              <tbody>{purchases.map((p: any, i) => (
-                <tr key={i}>
-                  <td className="text-text">{p.item_name}</td>
-                  <td>{p.qty}</td>
-                  <td className="text-subtext">{p.request_date ?? "—"}</td>
-                  <td className={p.supply_date && p.supply_date < todayStr && p.status === "مفتوح" ? "text-danger font-medium" : "text-subtext"}>
-                    {p.supply_date ?? "—"}
-                  </td>
-                  <td><Badge label={p.status} /></td>
-                  <td>
-                    {p.image_path ? (
-                      <a href={getImageUrl(p.image_path)} target="_blank" rel="noopener"
-                        className="text-accent text-xs hover:underline">عرض</a>
-                    ) : <span className="text-subtext text-xs">—</span>}
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          ) : <EmptyState message="لا توجد طلبات شراء" />
+            <div className="eg-card !p-0 overflow-hidden">
+              <table className="w-full text-xs border-collapse">
+                <thead><tr className="bg-card2 text-subtext">
+                  {["الصنف", "الكمية", "الطلب", "التوريد", "الحالة", "الصورة"].map(h => (
+                    <th key={h} className="px-4 py-2 text-right font-semibold">{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {purchases.map((p: any, i) => (
+                    <tr key={i} className="border-t border-border/40 hover:bg-card2/50">
+                      <td className="px-4 py-1.5 text-text">{p.item_name}</td>
+                      <td className="px-4 py-1.5 tabular-nums">{p.qty}</td>
+                      <td className="px-4 py-1.5 text-subtext tabular-nums">{p.request_date ?? "—"}</td>
+                      <td className={cn("px-4 py-1.5 tabular-nums",
+                        p.supply_date && p.supply_date < todayStr && p.status === "مفتوح" ? "text-danger font-semibold" : "text-subtext")}>
+                        {p.supply_date ?? "—"}
+                      </td>
+                      <td className="px-4 py-1.5"><Badge label={p.status} /></td>
+                      <td className="px-4 py-1.5">
+                        {p.image_path
+                          ? <a href={getImageUrl(p.image_path)} target="_blank" rel="noopener" className="text-accent hover:underline">عرض</a>
+                          : <span className="text-subtext">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div className="eg-card"><EmptyState message="لا توجد طلبات شراء" /></div>
         )}
 
-        {activeTab === "products" && (
-          <div className="space-y-4">
+        {/* ═══ المنتجات القياسية ═══ */}
+        {tab === "products" && (
+          <div className="space-y-3">
             {role === "admin" && (
-              <div className="flex flex-wrap items-end gap-2 bg-card2 rounded-lg p-3">
-                <div className="flex-1 min-w-[160px]">
-                  <label className="eg-label">المنتج القياسي</label>
-                  <select value={addProductId} onChange={e=>setAddProductId(e.target.value)} className="eg-select">
-                    <option value="">— اختر منتج —</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+              <div className="eg-card !p-3 flex flex-wrap items-end gap-2">
+                <div className="flex-1 min-w-[180px]">
+                  <Field label="المنتج القياسي">
+                    <select value={addProductId} onChange={e => setAddProductId(e.target.value)} className="eg-select !py-1.5 !text-xs">
+                      <option value="">— اختر منتج —</option>
+                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </Field>
                 </div>
                 <div className="w-24">
-                  <label className="eg-label">الكمية</label>
-                  <input type="number" min="0.01" step="any" value={addProductQty}
-                    onChange={e=>setAddProductQty(e.target.value)} className="eg-input" />
+                  <Field label="الكمية">
+                    <input type="number" min="0.01" step="any" value={addProductQty}
+                      onChange={e => setAddProductQty(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+                  </Field>
                 </div>
-                <button onClick={addProduct} disabled={savingProduct || !addProductId} className="eg-btn-primary">
-                  {savingProduct ? "جاري الإضافة..." : "إضافة"}
+                <button onClick={addProduct} disabled={savingProduct || !addProductId} className="eg-btn-primary !py-1.5 !text-xs">
+                  <Plus className="w-3.5 h-3.5" />{savingProduct ? "..." : "إضافة"}
                 </button>
               </div>
             )}
             {woProducts.length ? (
-              <table className="eg-table">
-                <thead><tr><th>المنتج</th><th>الكمية</th>{role === "admin" && <th>إجراءات</th>}</tr></thead>
-                <tbody>{woProducts.map((wp:any) => (
-                  <tr key={wp.id}>
-                    <td className="text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
-                    <td>{wp.quantity}</td>
-                    {role === "admin" && (
-                      <td><button onClick={() => removeProduct(wp.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button></td>
-                    )}
-                  </tr>
-                ))}</tbody>
-              </table>
-            ) : <EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" />}
+              <div className="eg-card !p-0 overflow-hidden">
+                <table className="w-full text-xs border-collapse">
+                  <thead><tr className="bg-card2 text-subtext">
+                    <th className="px-4 py-2 text-right font-semibold">المنتج</th>
+                    <th className="px-4 py-2 text-right font-semibold">الكمية</th>
+                    {role === "admin" && <th className="w-16" />}
+                  </tr></thead>
+                  <tbody>
+                    {woProducts.map((wp: any) => (
+                      <tr key={wp.id} className="border-t border-border/40 hover:bg-card2/50">
+                        <td className="px-4 py-1.5 text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
+                        <td className="px-4 py-1.5 tabular-nums">{wp.quantity}</td>
+                        {role === "admin" && (
+                          <td className="px-4 py-1.5">
+                            <button onClick={() => removeProduct(wp.id)} className="text-subtext hover:text-danger" title="حذف">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <div className="eg-card"><EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" /></div>}
           </div>
         )}
 
-        {activeTab === "prodlist" && (
-          <div className="space-y-5">
+        {/* ═══ قائمة الإنتاج ═══ */}
+        {tab === "prodlist" && (
+          <div className="space-y-3">
             {prodItems.length > 0 && (
-              <table className="eg-table w-full table-fixed">
-                <thead><tr>
-                  <th className="w-16">Qty</th>
-                  <th className="w-auto">Description</th>
-                  <th className="w-28">Part No.</th>
-                  <th className="w-28">Sheet Steel</th>
-                  <th className="w-24">Thickness</th>
-                  {PROD_STAGES.filter(s => s.key !== "paint").map(s => <th key={s.key} className="w-32">{s.label}</th>)}
-                  <th className="w-32">الدهان</th>
-                  {canManageLists && <th className="w-24">إجراءات</th>}
-                </tr></thead>
-                <tbody>{prodItems.map((it:any) => {
-                  const needsPaint = it.required_painting !== "NA";
-                  return (
-                    <tr key={it.id}>
-                      <td>{it.qty}</td>
-                      <td className="text-text whitespace-normal break-words">{it.description}</td>
-                      <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
-                      <td>{it.sheet_steel ?? "—"}</td>
-                      <td>{it.thickness ?? "—"}</td>
-                      {PROD_STAGES.filter(s => s.key !== "paint").map(s => {
-                        const produced = it[s.col] ?? 0;
-                        const remaining = (it.qty ?? 0) - produced;
-                        // التجميع بياخد من الدهان عادةً، أو من الصاج مباشرة لو البند NA (بدون دهان)
-                        const prevKey = s.key === "assembly" ? (needsPaint ? "paint" : "sheet") : undefined;
-                        const prevStage = PROD_STAGES.find(x => x.key === prevKey);
-                        const availableFromPrev = prevStage ? (it[prevStage.col] ?? 0) - produced : Infinity;
-                        const canLog = remaining > 0 && availableFromPrev > 0;
-                        return (
-                          <td key={s.key} className="text-center whitespace-nowrap">
-                            <div className="flex flex-col items-center gap-1">
-                              <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
-                                {produced} / {it.qty}
-                              </span>
-                              {s.key === "sheet" && (it.sheet_route?.length ?? 0) > 0 ? (
-                                // البند ليه مسار تصنيع — الصاج بيتحسب تلقائي من صفحة متابعة الصاج
-                                <a href="/monitoring/sheet" className="text-subtext text-[10px] hover:text-accent hover:underline"
-                                  title={`المسار: ${it.sheet_route.join(" ← ")}`}>
-                                  عبر مسار الصاج
-                                </a>
-                              ) : (
-                              <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
-                                className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-                                تسجيل
-                              </button>
-                              )}
-                              {!canLog && remaining > 0 && prevStage && (
-                                <span className="text-warning text-[10px]">بانتظار {prevStage.label}</span>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                      <td className="text-center whitespace-nowrap">
-                        {!needsPaint ? (
-                          <span className="text-xs text-subtext">NA</span>
-                        ) : (() => {
-                          const produced = it.qty_paint ?? 0;
-                          const remaining = (it.qty ?? 0) - produced;
-                          const availableFromSheet = (it.qty_sheet ?? 0) - produced;
-                          const canLog = remaining > 0 && availableFromSheet > 0;
-                          return (
-                            <div className="flex flex-col items-center gap-1">
-                              <span className={remaining <= 0 ? "text-success text-xs font-bold" : "text-text text-xs"}>
-                                {produced} / {it.qty}
-                              </span>
-                              <button onClick={() => openLogStage(it, "paint")} disabled={!canLog}
-                                className="text-accent disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-                                تسجيل
-                              </button>
-                              {!canLog && remaining > 0 && (
-                                <span className="text-warning text-[10px]">بانتظار الصاج</span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      {canManageLists && (
-                        <td>
-                          <div className="flex gap-2">
-                            <button onClick={() => openEditProdItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
-                            <button onClick={() => removeProdItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}</tbody>
-              </table>
+              <div className="eg-card !p-0 overflow-x-auto">
+                <table className="w-full text-xs border-collapse min-w-[900px]">
+                  <thead><tr className="bg-card2 text-subtext">
+                    <th className="px-3 py-2 text-center font-semibold w-14">Qty</th>
+                    <th className="px-3 py-2 text-right font-semibold">Description</th>
+                    <th className="px-3 py-2 text-right font-semibold w-24">Part No.</th>
+                    <th className="px-3 py-2 text-right font-semibold w-24">Steel</th>
+                    <th className="px-3 py-2 text-right font-semibold w-20">Thk.</th>
+                    {PROD_STAGES.map(s => <th key={s.key} className="px-3 py-2 text-center font-semibold w-32">{s.label}</th>)}
+                    {canManageLists && <th className="w-16" />}
+                  </tr></thead>
+                  <tbody>
+                    {prodItems.map((it: any) => {
+                      const needsPaint = it.required_painting !== "NA";
+                      return (
+                        <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
+                          <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
+                          <td className="px-3 py-1.5 text-text">{it.description}</td>
+                          <td className="px-3 py-1.5 font-mono text-accent">{it.part_no ?? "—"}</td>
+                          <td className="px-3 py-1.5">{it.sheet_steel ?? "—"}</td>
+                          <td className="px-3 py-1.5">{it.thickness ?? "—"}</td>
+                          {PROD_STAGES.map(s => {
+                            if (s.key === "paint" && !needsPaint) {
+                              return <td key={s.key} className="px-3 py-1.5 text-center text-subtext">NA</td>;
+                            }
+                            const produced = it[s.col] ?? 0;
+                            const remaining = (it.qty ?? 0) - produced;
+                            let prevKey: StageKey | null = null;
+                            if (s.key === "paint") prevKey = "sheet";
+                            if (s.key === "assembly") prevKey = needsPaint ? "paint" : "sheet";
+                            const prevCol = prevKey ? `qty_${prevKey}` : null;
+                            const available = prevCol ? (it[prevCol] ?? 0) - produced : Infinity;
+                            const canLog = remaining > 0 && available > 0;
+                            const prevLabel = PROD_STAGES.find(x => x.key === prevKey)?.label;
+                            return (
+                              <td key={s.key} className="px-3 py-1.5">
+                                <div className="flex items-center justify-center gap-2">
+                                  <span className={cn("tabular-nums", remaining <= 0 ? "text-success font-semibold" : "text-text")}>
+                                    {fmt(produced)}/{fmt(it.qty)}
+                                  </span>
+                                  <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
+                                    className="text-accent disabled:text-subtext disabled:cursor-not-allowed hover:underline">
+                                    تسجيل
+                                  </button>
+                                </div>
+                                {!canLog && remaining > 0 && prevLabel && (
+                                  <p className="text-[10px] text-warning text-center mt-0.5">بانتظار {prevLabel}</p>
+                                )}
+                              </td>
+                            );
+                          })}
+                          {canManageLists && (
+                            <td className="px-3 py-1.5">
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => openEditProdItem(it)} className="text-subtext hover:text-accent" title="تعديل">
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button onClick={() => removeProdItem(it.id)} className="text-subtext hover:text-danger" title="حذف">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
+            {prodItems.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود إنتاج بعد" /></div>}
 
             {canManageLists && (
-              <div className="space-y-2">
-                <p className="text-xs text-subtext">
-                  الصق البنود مباشرة من إكسل (Qty, Description, Part No., Sheet Steel, Thickness) في أي خانة، أو اكتبها يدويًا.
-                </p>
-                <div className="border border-border rounded-lg">
-                  <table className="eg-table w-full table-fixed">
-                    <thead><tr>
-                      <th className="w-16">Qty</th>
-                      <th className="w-auto">Description</th>
-                      <th className="w-28">Part No.</th>
-                      <th className="w-28">Sheet Steel</th>
-                      <th className="w-24">Thickness</th>
-                      <th className="w-32">الدهان</th>
-                      <th className="w-8"></th>
-                    </tr></thead>
-                    <tbody>
-                      {draftRows.map((row, rIdx) => (
-                        <tr key={rIdx}>
-                          {PROD_COLS.map((col, cIdx) => (
-                            <td key={col}>
-                              <input value={(row as any)[col]}
-                                onChange={e => updateDraftRow(rIdx, { [col]: e.target.value } as Partial<DraftRow>)}
-                                onPaste={e => handleGridPaste(e, rIdx, cIdx)}
-                                className="eg-input !py-1 !text-sm" />
-                            </td>
-                          ))}
-                          <td>
-                            <select value={row.required_painting}
-                              onChange={e => updateDraftRow(rIdx, { required_painting: e.target.value as "YES"|"NA" })}
-                              className="eg-select !py-1 !text-sm">
-                              <option value="YES">يدخل دهان</option>
-                              <option value="NA">بدون دهان (NA)</option>
-                            </select>
-                          </td>
-                          <td>
-                            <button onClick={() => removeDraftRow(rIdx)} className="text-danger/60 hover:text-danger text-xs">✕</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div className="eg-card !p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-text">إضافة بنود</p>
+                  <p className="text-[11px] text-subtext">الصق من Excel في أي خانة (Qty, Description, Part No., Steel, Thickness)</p>
                 </div>
+                <GridEditor
+                  cols={[
+                    { key: "qty", label: "Qty", w: "w-16" },
+                    { key: "description", label: "Description", w: "" },
+                    { key: "part_no", label: "Part No.", w: "w-28" },
+                    { key: "sheet_steel", label: "Steel", w: "w-28" },
+                    { key: "thickness", label: "Thk.", w: "w-24" },
+                  ]}
+                  rows={draftRows as any[]}
+                  onChange={(idx, patch) => updateProdDraft(idx, patch as Partial<ProdDraft>)}
+                  onPaste={handleProdPaste}
+                  onRemove={removeProdDraft}
+                  extra={(row, idx) => (
+                    <select value={row.required_painting}
+                      onChange={e => updateProdDraft(idx, { required_painting: e.target.value as "YES" | "NA" })}
+                      className="eg-select !py-1 !text-xs">
+                      <option value="YES">يدخل دهان</option>
+                      <option value="NA">بدون دهان</option>
+                    </select>
+                  )}
+                  extraHead="الدهان"
+                />
                 <div className="flex gap-2">
-                  <button onClick={addDraftRow} className="eg-btn-ghost text-xs">+ صف يدوي</button>
-                  <button onClick={saveProdList} disabled={savingProdList} className="eg-btn-primary text-sm">
-                    {savingProdList ? "جاري الحفظ..." : "💾 حفظ البنود"}
+                  <button onClick={() => setDraftRows(p => [...p, emptyProdDraft()])} className="eg-btn-ghost !py-1 !text-xs">
+                    <Plus className="w-3 h-3" />صف
+                  </button>
+                  <button onClick={saveProdList} disabled={savingProdList} className="eg-btn-primary !py-1 !text-xs">
+                    <Save className="w-3 h-3" />{savingProdList ? "جاري الحفظ..." : "حفظ البنود"}
                   </button>
                 </div>
               </div>
@@ -711,106 +660,95 @@ export default function WODetailClient({
           </div>
         )}
 
-        {activeTab === "bom" && (
-          <div className="space-y-5">
-            {department ? (
-              <p className="text-xs text-subtext">
-                بنود الـ BOM الخاصة بقسمك ({department}) فقط{role === "manager" ? " — وأنت كمدير تشوف كل الأقسام" : ""}.
-                {!canManageLists && " يمكنك صرف الكميات فقط."}
-              </p>
-            ) : (
-              <p className="text-xs text-warning">قسمك غير محدد.</p>
-            )}
+        {/* ═══ BOM ═══ */}
+        {tab === "bom" && (
+          <div className="space-y-3">
+            <p className="text-[11px] text-subtext">
+              {department
+                ? <>بنود الـ BOM لقسم <span className="text-text">{department}</span>{role === "manager" ? " — أنت كمدير تشوف كل الأقسام" : ""}.</>
+                : <span className="text-warning">قسمك غير محدد.</span>}
+            </p>
 
             {bomItems.length > 0 && (
-              <table className="eg-table w-full table-fixed">
-                <thead><tr>
-                  <th className="w-14">S.NO.</th>
-                  <th className="w-16">Qty.</th>
-                  <th className="w-16">Unit</th>
-                  <th className="w-auto">Description</th>
-                  <th className="w-28">Part No.</th>
-                  <th className="w-32">Rem.</th>
-                  <th className="w-20">القسم</th>
-                  <th className="w-20">المنصرف</th>
-                  <th className="w-20">المتبقي</th>
-                  <th className="w-32">إجراءات</th>
-                </tr></thead>
-                <tbody>{bomItems.map((it:any) => {
-                  const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
-                  return (
-                    <tr key={it.id}>
-                      <td>{it.s_no ?? "—"}</td>
-                      <td>{it.qty}</td>
-                      <td>{it.unit ?? "—"}</td>
-                      <td className="text-text whitespace-normal break-words">{it.description}</td>
-                      <td className="font-mono text-accent">{it.part_no ?? "—"}</td>
-                      <td>{it.remark ?? "—"}</td>
-                      <td><Badge label={it.department} /></td>
-                      <td className="text-text font-medium">{it.qty_dispensed ?? 0}</td>
-                      <td className={remaining <= 0 ? "text-success font-medium" : "text-warning font-medium"}>
-                        {remaining}
-                      </td>
-                      <td>
-                        <div className="flex gap-2 whitespace-nowrap">
-                          <button onClick={() => openDispense(it)} disabled={remaining <= 0}
-                            className="text-success disabled:text-subtext disabled:cursor-not-allowed text-xs hover:underline">
-                            صرف
-                          </button>
-                          {canManageLists && (
-                            <>
-                              <button onClick={() => openEditBomItem(it)} className="text-accent hover:text-accent2 text-xs hover:underline">تعديل</button>
-                              <button onClick={() => removeBomItem(it.id)} className="text-danger/60 hover:text-danger text-xs hover:underline">حذف</button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}</tbody>
-              </table>
-            )}
-            {bomItems.length === 0 && <EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" />}
-
-            {canManageLists && (
-              <div className="space-y-2">
-                <p className="text-xs text-subtext">
-                  الصق البنود مباشرة من إكسل (S.NO, Qty, Unit, Description, Part No., Remark)، أو اكتبها يدويًا. القسم هيتحدد تلقائي حسب قسمك.
-                </p>
-                <div className="border border-border rounded-lg">
-                  <table className="eg-table w-full table-fixed">
-                    <thead><tr>
-                      <th className="w-14">S.NO.</th>
-                      <th className="w-16">Qty.</th>
-                      <th className="w-16">Unit</th>
-                      <th className="w-auto">Description</th>
-                      <th className="w-28">Part No.</th>
-                      <th className="w-32">Rem.</th>
-                      <th className="w-8"></th>
-                    </tr></thead>
-                    <tbody>
-                      {bomDraftRows.map((row, rIdx) => (
-                        <tr key={rIdx}>
-                          {BOM_COLS.map((col, cIdx) => (
-                            <td key={col}>
-                              <input value={(row as any)[col]}
-                                onChange={e => updateBomDraftRow(rIdx, { [col]: e.target.value } as Partial<BomDraftRow>)}
-                                onPaste={e => handleBomGridPaste(e, rIdx, cIdx)}
-                                className="eg-input !py-1 !text-sm" />
-                            </td>
-                          ))}
-                          <td>
-                            <button onClick={() => removeBomDraftRow(rIdx)} className="text-danger/60 hover:text-danger text-xs">✕</button>
+              <div className="eg-card !p-0 overflow-x-auto">
+                <table className="w-full text-xs border-collapse min-w-[860px]">
+                  <thead><tr className="bg-card2 text-subtext">
+                    <th className="px-3 py-2 text-center font-semibold w-14">S.NO</th>
+                    <th className="px-3 py-2 text-center font-semibold w-16">Qty</th>
+                    <th className="px-3 py-2 text-center font-semibold w-16">Unit</th>
+                    <th className="px-3 py-2 text-right font-semibold">Description</th>
+                    <th className="px-3 py-2 text-right font-semibold w-24">Part No.</th>
+                    <th className="px-3 py-2 text-right font-semibold w-28">Remark</th>
+                    <th className="px-3 py-2 text-center font-semibold w-20">القسم</th>
+                    <th className="px-3 py-2 text-center font-semibold w-20">المنصرف</th>
+                    <th className="px-3 py-2 text-center font-semibold w-20">المتبقي</th>
+                    <th className="px-3 py-2 text-center font-semibold w-36">إجراءات</th>
+                  </tr></thead>
+                  <tbody>
+                    {bomItems.map((it: any) => {
+                      const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
+                      return (
+                        <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
+                          <td className="px-3 py-1.5 text-center">{it.s_no ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
+                          <td className="px-3 py-1.5 text-center">{it.unit ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-text">{it.description}</td>
+                          <td className="px-3 py-1.5 font-mono text-accent">{it.part_no ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-subtext">{it.remark ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-center"><Badge label={it.department} /></td>
+                          <td className="px-3 py-1.5 text-center tabular-nums font-medium">{it.qty_dispensed ?? 0}</td>
+                          <td className={cn("px-3 py-1.5 text-center tabular-nums font-semibold", remaining <= 0 ? "text-success" : "text-warning")}>{remaining}</td>
+                          <td className="px-3 py-1.5">
+                            <div className="flex items-center justify-center gap-2">
+                              <button onClick={() => { setDispenseItem(it); setDispenseQty(""); }} disabled={remaining <= 0}
+                                className="text-success disabled:text-subtext disabled:cursor-not-allowed hover:underline">صرف</button>
+                              {canManageLists && (
+                                <>
+                                  <button onClick={() => openEditBomItem(it)} className="text-subtext hover:text-accent" title="تعديل">
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button onClick={() => removeBomItem(it.id)} className="text-subtext hover:text-danger" title="حذف">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {bomItems.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" /></div>}
+
+            {canManageLists && (
+              <div className="eg-card !p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-text">إضافة بنود BOM</p>
+                  <p className="text-[11px] text-subtext">الصق من Excel (S.NO, Qty, Unit, Description, Part No., Remark) — القسم تلقائي</p>
                 </div>
+                <GridEditor
+                  cols={[
+                    { key: "s_no", label: "S.NO", w: "w-16" },
+                    { key: "qty", label: "Qty", w: "w-16" },
+                    { key: "unit", label: "Unit", w: "w-16" },
+                    { key: "description", label: "Description", w: "" },
+                    { key: "part_no", label: "Part No.", w: "w-28" },
+                    { key: "remark", label: "Remark", w: "w-32" },
+                  ]}
+                  rows={bomDraftRows as any[]}
+                  onChange={(idx, patch) => updateBomDraft(idx, patch as Partial<BomDraft>)}
+                  onPaste={handleBomPaste}
+                  onRemove={removeBomDraft}
+                />
                 <div className="flex gap-2">
-                  <button onClick={addBomDraftRow} className="eg-btn-ghost text-xs">+ صف يدوي</button>
-                  <button onClick={saveBomList} disabled={savingBomList || !department} className="eg-btn-primary text-sm">
-                    {savingBomList ? "جاري الحفظ..." : "💾 حفظ البنود"}
+                  <button onClick={() => setBomDraftRows(p => [...p, emptyBomDraft()])} className="eg-btn-ghost !py-1 !text-xs">
+                    <Plus className="w-3 h-3" />صف
+                  </button>
+                  <button onClick={saveBomList} disabled={savingBomList || !department} className="eg-btn-primary !py-1 !text-xs">
+                    <Save className="w-3 h-3" />{savingBomList ? "جاري الحفظ..." : "حفظ البنود"}
                   </button>
                 </div>
               </div>
@@ -819,114 +757,182 @@ export default function WODetailClient({
         )}
       </div>
 
-      {/* تعديل صف من قائمة إنتاج الأمر */}
+      {/* ═══ مودال تعديل صف الإنتاج ═══ */}
       <Modal open={!!editProdItem} onClose={() => setEditProdItem(null)} title="تعديل صف قائمة الإنتاج">
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Qty</label>
-              <input type="number" min="0.01" step="any" value={editProdForm.qty}
-                onChange={e=>setEditProdForm(f=>({...f,qty:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Part No.</label>
-              <input value={editProdForm.part_no}
-                onChange={e=>setEditProdForm(f=>({...f,part_no:e.target.value}))} className="eg-input" /></div>
+            <Field label="Qty"><input type="number" min="0.01" step="any" value={editProdForm.qty}
+              onChange={e => setEditProdForm(f => ({ ...f, qty: e.target.value }))} className="eg-input" /></Field>
+            <Field label="Part No."><input value={editProdForm.part_no}
+              onChange={e => setEditProdForm(f => ({ ...f, part_no: e.target.value }))} className="eg-input" /></Field>
           </div>
-          <div><label className="eg-label">Description</label>
-            <input value={editProdForm.description}
-              onChange={e=>setEditProdForm(f=>({...f,description:e.target.value}))} className="eg-input" /></div>
+          <Field label="Description"><input value={editProdForm.description}
+            onChange={e => setEditProdForm(f => ({ ...f, description: e.target.value }))} className="eg-input" /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Sheet Steel</label>
-              <input value={editProdForm.sheet_steel}
-                onChange={e=>setEditProdForm(f=>({...f,sheet_steel:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Thickness</label>
-              <input value={editProdForm.thickness}
-                onChange={e=>setEditProdForm(f=>({...f,thickness:e.target.value}))} className="eg-input" /></div>
+            <Field label="Steel"><input value={editProdForm.sheet_steel}
+              onChange={e => setEditProdForm(f => ({ ...f, sheet_steel: e.target.value }))} className="eg-input" /></Field>
+            <Field label="Thickness"><input value={editProdForm.thickness}
+              onChange={e => setEditProdForm(f => ({ ...f, thickness: e.target.value }))} className="eg-input" /></Field>
           </div>
-          <div>
-            <label className="eg-label">الدهان</label>
+          <Field label="الدهان">
             <select value={editProdForm.required_painting}
-              onChange={e=>setEditProdForm(f=>({...f,required_painting:e.target.value as "YES"|"NA"}))}
+              onChange={e => setEditProdForm(f => ({ ...f, required_painting: e.target.value as "YES" | "NA" }))}
               className="eg-select">
               <option value="YES">يدخل دهان</option>
-              <option value="NA">بدون دهان (NA)</option>
+              <option value="NA">بدون دهان</option>
             </select>
-          </div>
+          </Field>
+          <button onClick={submitEditProdItem} className="eg-btn-success w-full justify-center mt-2">
+            <Save className="w-4 h-4" />حفظ التعديل
+          </button>
         </div>
-        <button onClick={submitEditProdItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
       </Modal>
 
-      {/* تعديل بند BOM */}
+      {/* ═══ مودال تعديل BOM ═══ */}
       <Modal open={!!editBomItem} onClose={() => setEditBomItem(null)} title="تعديل بند BOM">
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">S.NO.</label>
-              <input type="number" value={editBomForm.s_no}
-                onChange={e=>setEditBomForm(f=>({...f,s_no:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Qty.</label>
-              <input type="number" min="0.01" step="any" value={editBomForm.qty}
-                onChange={e=>setEditBomForm(f=>({...f,qty:e.target.value}))} className="eg-input" /></div>
+            <Field label="S.NO"><input type="number" value={editBomForm.s_no}
+              onChange={e => setEditBomForm(f => ({ ...f, s_no: e.target.value }))} className="eg-input" /></Field>
+            <Field label="Qty"><input type="number" min="0.01" step="any" value={editBomForm.qty}
+              onChange={e => setEditBomForm(f => ({ ...f, qty: e.target.value }))} className="eg-input" /></Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="eg-label">Unit</label>
-              <input value={editBomForm.unit}
-                onChange={e=>setEditBomForm(f=>({...f,unit:e.target.value}))} className="eg-input" /></div>
-            <div><label className="eg-label">Part No.</label>
-              <input value={editBomForm.part_no}
-                onChange={e=>setEditBomForm(f=>({...f,part_no:e.target.value}))} className="eg-input" /></div>
+            <Field label="Unit"><input value={editBomForm.unit}
+              onChange={e => setEditBomForm(f => ({ ...f, unit: e.target.value }))} className="eg-input" /></Field>
+            <Field label="Part No."><input value={editBomForm.part_no}
+              onChange={e => setEditBomForm(f => ({ ...f, part_no: e.target.value }))} className="eg-input" /></Field>
           </div>
-          <div><label className="eg-label">Description</label>
-            <input value={editBomForm.description}
-              onChange={e=>setEditBomForm(f=>({...f,description:e.target.value}))} className="eg-input" /></div>
-          <div><label className="eg-label">Remark</label>
-            <input value={editBomForm.remark}
-              onChange={e=>setEditBomForm(f=>({...f,remark:e.target.value}))} className="eg-input" /></div>
+          <Field label="Description"><input value={editBomForm.description}
+            onChange={e => setEditBomForm(f => ({ ...f, description: e.target.value }))} className="eg-input" /></Field>
+          <Field label="Remark"><input value={editBomForm.remark}
+            onChange={e => setEditBomForm(f => ({ ...f, remark: e.target.value }))} className="eg-input" /></Field>
+          <button onClick={submitEditBomItem} className="eg-btn-success w-full justify-center mt-2">
+            <Save className="w-4 h-4" />حفظ التعديل
+          </button>
         </div>
-        <button onClick={submitEditBomItem} className="eg-btn-success w-full justify-center mt-5">💾 حفظ التعديل</button>
       </Modal>
 
-      {/* صرف كمية من بند BOM */}
-      <Modal open={!!dispenseItem} onClose={() => setDispenseItem(null)} title="📤 صرف كمية">
+      {/* ═══ مودال صرف BOM ═══ */}
+      <Modal open={!!dispenseItem} onClose={() => setDispenseItem(null)} title="صرف كمية" size="sm">
         {dispenseItem && (
-          <div className="space-y-4">
-            <div className="bg-card2 rounded-lg p-3 text-sm">
-              <p className="text-text font-medium">{dispenseItem.description}</p>
-              <p className="text-subtext text-xs mt-1">
-                الإجمالي: {dispenseItem.qty} — المنصرف: {dispenseItem.qty_dispensed ?? 0} — المتبقي: {(dispenseItem.qty ?? 0) - (dispenseItem.qty_dispensed ?? 0)}
+          <div className="space-y-3">
+            <div className="bg-card2 rounded-lg p-3">
+              <p className="text-sm text-text font-medium">{dispenseItem.description}</p>
+              <p className="text-[11px] text-subtext mt-1 tabular-nums">
+                الإجمالي {dispenseItem.qty} · المنصرف {dispenseItem.qty_dispensed ?? 0} · المتبقي {(dispenseItem.qty ?? 0) - (dispenseItem.qty_dispensed ?? 0)}
               </p>
             </div>
-            <div>
-              <label className="eg-label">الكمية المراد صرفها</label>
-              <input type="number" min="0.01" step="any" value={dispenseQty}
-                onChange={e => setDispenseQty(e.target.value)} className="eg-input" autoFocus />
-            </div>
+            <Field label="الكمية المراد صرفها">
+              <input type="number" min="0.01" step="any" value={dispenseQty} autoFocus
+                onChange={e => setDispenseQty(e.target.value)} className="eg-input" />
+            </Field>
             <button onClick={submitDispense} disabled={dispensing} className="eg-btn-success w-full justify-center">
-              {dispensing ? "جاري الصرف..." : "✅ تأكيد الصرف"}
+              {dispensing ? "جاري الصرف..." : "تأكيد الصرف"}
             </button>
           </div>
         )}
       </Modal>
 
-      {/* تسجيل إنتاج لمرحلة (صاج/دهان/تجميع) */}
-      <Modal open={!!logStage} onClose={() => setLogStage(null)} title="📝 تسجيل إنتاج">
+      {/* ═══ مودال تسجيل إنتاج ═══ */}
+      <Modal open={!!logStage} onClose={() => setLogStage(null)} title="تسجيل إنتاج" size="sm">
         {logStage && (
-          <div className="space-y-4">
-            <div className="bg-card2 rounded-lg p-3 text-sm">
-              <p className="text-text font-medium">{logStage.item.description}</p>
-              <p className="text-subtext text-xs mt-1">
-                المرحلة: {PROD_STAGES.find(s => s.key === logStage.stage)?.label} —
-                المنتج: {logStage.item[`qty_${logStage.stage}`] ?? 0} / {logStage.item.qty}
+          <div className="space-y-3">
+            <div className="bg-card2 rounded-lg p-3">
+              <p className="text-sm text-text font-medium">{logStage.item.description}</p>
+              <p className="text-[11px] text-subtext mt-1 tabular-nums">
+                المرحلة: {PROD_STAGES.find(s => s.key === logStage.stage)?.label} · المنجز {fmt(logStage.item[`qty_${logStage.stage}`] ?? 0)} / {fmt(logStage.item.qty)}
               </p>
             </div>
-            <div>
-              <label className="eg-label">الكمية المنجزة</label>
-              <input type="number" min="0.01" step="any" value={logQty}
-                onChange={e => setLogQty(e.target.value)} className="eg-input" autoFocus />
-            </div>
+            <Field label="الكمية المنجزة">
+              <input type="number" min="0.01" step="any" value={logQty} autoFocus
+                onChange={e => setLogQty(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && submitLogStage()} className="eg-input" />
+            </Field>
             <button onClick={submitLogStage} disabled={logging} className="eg-btn-success w-full justify-center">
-              {logging ? "جاري التسجيل..." : "✅ تأكيد التسجيل"}
+              {logging ? "جاري التسجيل..." : "تأكيد التسجيل"}
             </button>
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+/* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-[11px] text-subtext mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function DataTable({ head, rows, empty }: { head: string[]; rows: (string | number)[][]; empty: string }) {
+  if (!rows.length) return <div className="eg-card"><EmptyState message={empty} /></div>;
+  return (
+    <div className="eg-card !p-0 overflow-x-auto">
+      <table className="w-full text-xs border-collapse min-w-[560px]">
+        <thead><tr className="bg-card2 text-subtext">
+          {head.map(h => <th key={h} className="px-4 py-2 text-right font-semibold">{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-border/40 hover:bg-card2/50">
+              {r.map((cell, j) => (
+                <td key={j} className={cn("px-4 py-1.5", j === 0 ? "text-text" : "text-subtext")}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* محرر شبكي بيدعم اللصق من Excel */
+function GridEditor({
+  cols, rows, onChange, onPaste, onRemove, extra, extraHead,
+}: {
+  cols: { key: string; label: string; w: string }[];
+  rows: any[];
+  onChange: (idx: number, patch: Record<string, string>) => void;
+  onPaste: (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => void;
+  onRemove: (idx: number) => void;
+  extra?: (row: any, idx: number) => React.ReactNode;
+  extraHead?: string;
+}) {
+  return (
+    <div className="border border-border/60 rounded-lg overflow-x-auto">
+      <table className="w-full text-xs border-collapse min-w-[600px]">
+        <thead><tr className="bg-card2 text-subtext">
+          {cols.map(c => <th key={c.key} className={cn("px-2 py-1.5 text-right font-semibold", c.w)}>{c.label}</th>)}
+          {extra && <th className="px-2 py-1.5 text-right font-semibold w-36">{extraHead}</th>}
+          <th className="w-8" />
+        </tr></thead>
+        <tbody>
+          {rows.map((row, rIdx) => (
+            <tr key={rIdx} className="border-t border-border/40">
+              {cols.map((c, cIdx) => (
+                <td key={c.key} className="px-1 py-1">
+                  <input value={row[c.key] ?? ""}
+                    onChange={e => onChange(rIdx, { [c.key]: e.target.value })}
+                    onPaste={e => onPaste(e, rIdx, cIdx)}
+                    className="eg-input !py-1 !px-2 !text-xs" />
+                </td>
+              ))}
+              {extra && <td className="px-1 py-1">{extra(row, rIdx)}</td>}
+              <td className="px-1 py-1 text-center">
+                <button onClick={() => onRemove(rIdx)} className="text-subtext hover:text-danger" title="حذف الصف">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from "recharts";
 import { ChevronRight, Pencil, Trash2, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
+import CustodyPanel, { type CustodyRow, type ToolLite, type ItemLite } from "./CustodyPanel";
 
 const GRADES = ["فني", "مشرف", "مساعد"] as const;
 const STATUS_COLORS = {
@@ -17,7 +18,7 @@ const STATUS_COLORS = {
   mission: "#3b82f6",
 };
 
-type Tab = "overview" | "att" | "perm" | "ot" | "viol" | "prod" | "files" | "info";
+type Tab = "overview" | "att" | "perm" | "ot" | "viol" | "prod" | "files" | "custody" | "info";
 type Bucket = {
   key: string; label: string;
   present: number; absent: number; leave: number; mission: number;
@@ -32,7 +33,8 @@ const monthLabel = (key: string) => {
 };
 
 export default function TechDetailClient({
-  tech, allSkills, techSkills, attendance, permissions, overtime, violations, productivity, filesReceived, role,
+  tech, allSkills, techSkills, attendance, permissions, overtime, violations, productivity, filesReceived,
+  custody, tools, availableItems, role,
 }: {
   tech: any; allSkills: any[]; techSkills: { skill_id: number; skill_name?: string }[];
   attendance: { date: string; status: string }[];
@@ -41,6 +43,9 @@ export default function TechDetailClient({
   violations: { date: string; reason: string; details: string }[];
   productivity: any[];
   filesReceived: any[];
+  custody: CustodyRow[];
+  tools: ToolLite[];
+  availableItems: ItemLite[];
   role: string;
 }) {
   const router = useRouter();
@@ -186,6 +191,7 @@ export default function TechDetailClient({
     { key: "viol", label: `مخالفات (${violY.length})` },
     { key: "prod", label: `إنتاجية (${prodY.length})` },
     { key: "files", label: `ملفات (${filesY.length})` },
+    { key: "custody", label: `العهدة (${custody.filter(c => c.open_qty > 0).length})` },
     { key: "info", label: "البيانات" },
   ];
 
@@ -399,6 +405,19 @@ export default function TechDetailClient({
           empty="لا توجد ملفات مستلمة"
           head={["الملف", "النوع", "أمر الشغل", "تاريخ التسليم"]}
           rows={filesY.map(f => [f.file_name, f.file_type ?? "—", f.wo_number ?? "—", f.delivery_date ?? "—"])} />}
+
+        {/* ── العهدة ── */}
+        {tab === "custody" && (
+          <CustodyPanel
+            techId={tech.id}
+            techName={tech.name}
+            techDept={tech.department ?? null}
+            role={role}
+            custody={custody}
+            tools={tools}
+            availableItems={availableItems}
+          />
+        )}
 
         {/* ── البيانات ── */}
         {tab === "info" && (
