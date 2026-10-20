@@ -53,9 +53,20 @@ export default async function TechDetailPage({ params }: { params: { id: string 
           .eq("delivered_to", techId).order("delivery_date", { ascending: false }).range(a, b)),
     ]);
 
+  const [custody, tools, availableItems] = await Promise.all([
+    supabase.from("custody")
+      .select("id, tool_id, tool_item_id, qty, open_qty, status, issued_at, note, tools(name,is_consumable,unit), tool_items(serial_no), custody_events(event,qty,note,created_at)")
+      .eq("tech_id", techId).order("id", { ascending: false }).then(r => r.data ?? []),
+    supabase.from("tools").select("id,name,is_consumable,unit,department").eq("active", true).order("name").then(r => r.data ?? []),
+    supabase.from("tool_items").select("id,tool_id,serial_no,status").eq("status", "متاح").order("serial_no").then(r => r.data ?? []),
+  ]);
+
   return (
     <AppShell role={role}>
       <TechDetailClient
+        custody={custody as any[]}
+        tools={tools as any[]}
+        availableItems={availableItems as any[]}
         tech={tech}
         allSkills={allSkills as any[]}
         techSkills={(techSkills as any[]).map(ts => ({ skill_id: ts.skill_id, skill_name: ts.skills?.skill_name }))}
