@@ -3,7 +3,9 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LogOut, X } from "lucide-react";
+import { KeyRound, LogOut, X } from "lucide-react";
+import { useState } from "react";
+import ChangePasswordModal from "./ChangePasswordModal";
 import { supabase } from "@/lib/supabase";
 import { navForRole } from "@/lib/nav";
 import { roleLabel, deptLabel, initials } from "@/lib/roles";
@@ -26,6 +28,7 @@ export default function Sidebar({
   const path = usePathname();
   const router = useRouter();
   const items = navForRole(role);
+  const [pwOpen, setPwOpen] = useState(false);
 
   // نقفل الدرج بعد ما يتغير الرابط
   useEffect(() => { onClose(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [path]);
@@ -60,7 +63,7 @@ export default function Sidebar({
         className={cn(
           "fixed inset-y-0 right-0 z-50 w-64 bg-card flex flex-col border-l border-border/50 transition-transform duration-200",
           open ? "translate-x-0" : "translate-x-full",
-          "md:static md:z-auto md:w-60 md:min-h-screen md:translate-x-0 md:shrink-0"
+          "md:sticky md:top-0 md:h-screen md:self-start md:z-auto md:w-60 md:translate-x-0 md:shrink-0"
         )}
       >
         {/* Logo */}
@@ -78,7 +81,7 @@ export default function Sidebar({
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+        <nav className="flex-1 min-h-0 p-3 space-y-0.5 overflow-y-auto">
           {items.map(({ href, icon: Icon, label }) => {
             const active = path === href || path.startsWith(href + "/");
             return (
@@ -109,13 +112,19 @@ export default function Sidebar({
               </p>
             </div>
           </div>
+          <button onClick={() => setPwOpen(true)}
+            className="mt-2 flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-subtext hover:bg-border/50 hover:text-text w-full transition-all">
+            <KeyRound className="w-4 h-4" />
+            تغيير كلمة المرور
+          </button>
           <button onClick={handleLogout}
-            className="mt-2 flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-subtext hover:bg-danger/10 hover:text-danger w-full transition-all">
+            className="mt-1 flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-subtext hover:bg-danger/10 hover:text-danger w-full transition-all">
             <LogOut className="w-4 h-4" />
             تسجيل الخروج
           </button>
         </div>
       </aside>
+      <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} email={user?.email ?? null} />
     </>
   );
 }

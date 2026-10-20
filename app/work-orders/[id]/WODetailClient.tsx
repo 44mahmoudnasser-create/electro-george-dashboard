@@ -8,6 +8,7 @@ import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
 import { ChevronRight, Save, Plus, X, Pencil, Trash2 } from "lucide-react";
 import { today, cn } from "@/lib/utils";
+import { deptLabel } from "@/lib/roles";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"];
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"];
@@ -232,6 +233,9 @@ export default function WODetailClient({
   const [editBomItem, setEditBomItem] = useState<any>(null);
   const [editBomForm, setEditBomForm] = useState<BomDraft>(emptyBomDraft());
   const [dispenseItem, setDispenseItem] = useState<any>(null);
+  // المدير مش مرتبط بقسم، فبيختار القسم اللي البنود دي بتاعته
+  const [bomDept, setBomDept] = useState("");
+  const bomDeptEffective = role === "manager" ? bomDept : (department ?? "");
   const [dispenseQty, setDispenseQty] = useState("");
   const [dispensing, setDispensing] = useState(false);
 
@@ -267,6 +271,7 @@ export default function WODetailClient({
       description: r.description.trim(),
       part_no: r.part_no.trim() || null,
       remark: r.remark.trim() || null,
+      department: bomDeptEffective,
     }));
     if (rows.length === 0) return;
     setSavingBomList(true);
@@ -596,9 +601,9 @@ export default function WODetailClient({
         {tab === "bom" && (
           <div className="space-y-3">
             <p className="text-[11px] text-subtext">
-              {department
-                ? <>بنود الـ BOM لقسم <span className="text-text">{department}</span>{role === "manager" ? " — أنت كمدير تشوف كل الأقسام" : ""}.</>
-                : <span className="text-warning">قسمك غير محدد.</span>}
+              {bomDeptEffective
+                ? <>بنود الـ BOM لقسم <span className="text-text">{deptLabel(bomDeptEffective)}</span>.</>
+                : <span className="text-warning">اختار القسم اللي البنود دي بتاعته قبل الحفظ.</span>}
             </p>
 
             {bomItems.length > 0 && (
@@ -679,7 +684,13 @@ export default function WODetailClient({
                   <button onClick={() => setBomDraftRows(p => [...p, emptyBomDraft()])} className="eg-btn-ghost !py-1 !text-xs">
                     <Plus className="w-3 h-3" />صف
                   </button>
-                  <button onClick={saveBomList} disabled={savingBomList || !department} className="eg-btn-primary !py-1 !text-xs">
+                  {role === "manager" && (
+                    <select value={bomDept} onChange={e => setBomDept(e.target.value)} className="eg-select !py-1 !text-xs w-36">
+                      <option value="">— اختار القسم —</option>
+                      {["SHEET", "PAINT", "ASSEMBLY"].map(d => <option key={d} value={d}>{deptLabel(d)}</option>)}
+                    </select>
+                  )}
+                  <button onClick={saveBomList} disabled={savingBomList || !bomDeptEffective} className="eg-btn-primary !py-1 !text-xs">
                     <Save className="w-3 h-3" />{savingBomList ? "جاري الحفظ..." : "حفظ البنود"}
                   </button>
                 </div>

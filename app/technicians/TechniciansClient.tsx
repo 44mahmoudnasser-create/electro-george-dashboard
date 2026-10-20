@@ -2,6 +2,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { deptLabel } from "@/lib/roles";
 import { Technician } from "@/types";
 import Modal from "@/components/ui/Modal";
 import Badge from "@/components/ui/Badge";
@@ -29,6 +30,9 @@ export default function TechniciansClient({
   const [filterGrade, setFilterGrade] = useState("الكل");
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // المدير مش مرتبط بقسم، فبيختار قسم الفني
+  const [formDept, setFormDept] = useState("");
+  const deptEffective = role === "manager" ? formDept : (department ?? "");
   const [error, setError] = useState("");
   const [form, setForm] = useState({
     name: "", grade: "فني" as typeof GRADES[number], route: "", skill_ids: [] as number[],
@@ -55,7 +59,7 @@ export default function TechniciansClient({
     setSaving(true); setError("");
     const { data, error: e1 } = await supabase
       .from("technicians")
-      .insert({ name: form.name.trim(), grade: form.grade, route: form.route, department })
+      .insert({ name: form.name.trim(), grade: form.grade, route: form.route, department: deptEffective })
       .select()
       .single();
     if (e1) { setSaving(false); setError(e1.message); return; }
@@ -161,6 +165,15 @@ export default function TechniciansClient({
                 className="eg-input" placeholder="مثال: كرداسة" />
             </div>
           </div>
+          {role === "manager" && (
+            <div>
+              <label className="eg-label">القسم *</label>
+              <select value={formDept} onChange={e => setFormDept(e.target.value)} className="eg-select">
+                <option value="">— اختار القسم —</option>
+                {["SHEET", "PAINT", "ASSEMBLY"].map(d => <option key={d} value={d}>{deptLabel(d)}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="eg-label">المهارات</label>
             <div className="bg-card2 rounded-lg p-3 max-h-40 overflow-y-auto grid grid-cols-2 gap-2">
@@ -177,7 +190,7 @@ export default function TechniciansClient({
             </div>
           </div>
           {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={addTech} disabled={saving || !form.name.trim()} className="eg-btn-primary w-full justify-center">
+          <button onClick={addTech} disabled={saving || !form.name.trim() || !deptEffective} className="eg-btn-primary w-full justify-center">
             {saving ? "جاري الحفظ..." : "حفظ"}
           </button>
         </div>
