@@ -73,7 +73,7 @@ export default function WODetailClient({
   wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  initialProdItems: any[]; deptStatus: { department: string; status: string; applicable: boolean }[];
+  initialProdItems: any[]; deptStatus: { department: string; status: string }[];
   myDeptCode: string | null;
   initialBomItems: any[]; role: string; department: string | null;
 }) {
@@ -115,12 +115,7 @@ export default function WODetailClient({
     flash(true, `تم تحديث حالة ${deptLabel(dept)}`);
   };
 
-  const toggleApplicable = async (dept: string, value: boolean) => {
-    const { error } = await supabase.from("wo_department_status")
-      .update({ applicable: value }).eq("wo_id", wo.id).eq("department", dept);
-    if (error) { flash(false, error.message); return; }
-    setDeptRows(prev => prev.map(d => d.department === dept ? { ...d, applicable: value } : d));
-  };
+
   const [checks, setChecks] = useState({
     chk_client: !!wo.chk_client, chk_quality: !!wo.chk_quality, chk_assembly: !!wo.chk_assembly,
   });
@@ -456,7 +451,7 @@ export default function WODetailClient({
             <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
             {deptRows.length > 0 ? (
               <span className="text-[11px] text-subtext tabular-nums">
-                {deptRows.filter(d => d.applicable && d.status === "مكتمل").length} / {deptRows.filter(d => d.applicable).length} مكتمل
+                {deptRows.filter(d => d.status === "مكتمل").length} / {deptRows.length} مكتمل
               </span>
             ) : (
               <span className="text-[11px] text-warning">مفيش أقسام مربوطة بالأمر (راجع migrations 008 و009)</span>
@@ -466,20 +461,12 @@ export default function WODetailClient({
             {deptRows.map(d => {
               const mine = canSetStatus || myDeptCode === d.department;
               return (
-                <div key={d.department} className={cn("flex items-center justify-between gap-3 py-2", !d.applicable && "opacity-50")}>
+                <div key={d.department} className="flex items-center justify-between gap-3 py-2">
                   <div className="min-w-0">
                     <p className="text-xs text-text">{deptLabel(d.department)}</p>
-                    {!d.applicable && <p className="text-[10px] text-subtext">غير مطلوب في هذا الأمر</p>}
                   </div>
                   <div className="flex items-center gap-3">
-                    {canSetStatus && (
-                      <label className="flex items-center gap-1 text-[10px] text-subtext cursor-pointer">
-                        <input type="checkbox" checked={d.applicable} onChange={e => toggleApplicable(d.department, e.target.checked)}
-                          className="accent-emerald-500" />
-                        مطلوب
-                      </label>
-                    )}
-                    <select value={d.status} disabled={!mine || !d.applicable}
+                    <select value={d.status} disabled={!mine}
                       onChange={e => changeDeptStatus(d.department, e.target.value)}
                       className="eg-select !py-1 !text-xs w-32 disabled:opacity-50">
                       {["لم يبدأ", "جاري", "متوقف", "مكتمل"].map(s => <option key={s}>{s}</option>)}
