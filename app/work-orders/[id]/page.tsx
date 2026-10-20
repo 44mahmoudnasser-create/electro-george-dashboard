@@ -18,8 +18,6 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: productivity },
     { data: files },
     { data: purchases },
-    { data: products },
-    { data: woProducts },
     { data: prodItems },
     { data: bomItems },
   ] = await Promise.all([
@@ -34,10 +32,6 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("purchases")
       .select("item_name, qty, request_date, supply_date, status, image_path")
       .eq("wo_id", woId),
-    supabase.from("standard_products").select("id,name").order("name", { ascending: true }),
-    supabase.from("work_order_products")
-      .select("id, quantity, standard_product:standard_products(id,name)")
-      .eq("work_order_id", woId),
     supabase.from("wo_production_items").select("*").eq("work_order_id", woId).order("id", { ascending: true }),
     // RLS بتفلتر تلقائي: كل قسم يشوف بنوده هو بس، والمدير يشوف الكل
     supabase.from("wo_bom_items").select("*").eq("work_order_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
@@ -52,8 +46,6 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         productivity={(productivity ?? []).map((p: any) => ({ ...p, tech_name: p.technicians?.name }))}
         files={(files ?? []).map((f: any) => ({ ...f, supervisor_name: f.technicians?.name }))}
         purchases={purchases ?? []}
-        products={products ?? []}
-        initialWoProducts={woProducts ?? []}
         initialProdItems={prodItems ?? []}
         initialBomItems={bomItems ?? []}
         role={role}

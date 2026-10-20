@@ -29,7 +29,7 @@ const PROD_STAGES = [
   { key: "assembly", col: "qty_assembly", label: "التجميع" },
 ] as const;
 type StageKey = "sheet" | "paint" | "assembly";
-type Tab = "prod" | "files" | "purchases" | "products" | "prodlist" | "bom";
+type Tab = "prod" | "files" | "purchases" | "prodlist" | "bom";
 
 // بيقسم نص Excel المنسوخ لصفوف وخلايا، ويحترم الخلايا اللي فيها أسطر جديدة بين علامتي تنصيص
 const parseExcelClipboard = (input: string): string[][] => {
@@ -69,10 +69,10 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, products, initialWoProducts, initialProdItems, initialBomItems, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  products: { id: number; name: string }[]; initialWoProducts: any[]; initialProdItems: any[];
+  initialProdItems: any[];
   initialBomItems: any[]; role: string; department: string | null;
 }) {
   const router = useRouter();
@@ -114,31 +114,6 @@ export default function WODetailClient({
   };
 
   const setInfo = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirtyInfo(true); };
-
-  /* ─────────── منتجات قياسية مربوطة بالأمر ─────────── */
-  const [woProducts, setWoProducts] = useState<any[]>(initialWoProducts);
-  const [addProductId, setAddProductId] = useState("");
-  const [addProductQty, setAddProductQty] = useState("1");
-  const [savingProduct, setSavingProduct] = useState(false);
-
-  const addProduct = async () => {
-    if (!addProductId) return;
-    setSavingProduct(true);
-    const { data, error } = await supabase.from("work_order_products")
-      .insert({ work_order_id: wo.id, standard_product_id: parseInt(addProductId), quantity: parseFloat(addProductQty) || 1 })
-      .select("id, quantity, standard_product:standard_products(id,name)").single();
-    setSavingProduct(false);
-    if (error) { flash(false, error.message); return; }
-    setWoProducts(prev => [...prev, data]);
-    setAddProductId(""); setAddProductQty("1");
-  };
-
-  const removeProduct = async (linkId: number) => {
-    if (!confirm("حذف هذا المنتج من الأمر؟")) return;
-    const { error } = await supabase.from("work_order_products").delete().eq("id", linkId);
-    if (error) { flash(false, error.message); return; }
-    setWoProducts(prev => prev.filter(p => p.id !== linkId));
-  };
 
   /* ─────────── قائمة إنتاج الأمر ─────────── */
   const [prodItems, setProdItems] = useState<any[]>(initialProdItems);
@@ -353,7 +328,6 @@ export default function WODetailClient({
     { key: "prod", label: "الإنتاجية", count: productivity.length },
     { key: "prodlist", label: "قائمة الإنتاج", count: prodItems.length },
     { key: "bom", label: "BOM", count: bomItems.length },
-    { key: "products", label: "المنتجات", count: woProducts.length },
     { key: "purchases", label: "المشتريات", count: purchases.length },
     { key: "files", label: "الملفات", count: files.length },
   ];
@@ -488,59 +462,6 @@ export default function WODetailClient({
               </table>
             </div>
           ) : <div className="eg-card"><EmptyState message="لا توجد طلبات شراء" /></div>
-        )}
-
-        {/* ═══ المنتجات القياسية ═══ */}
-        {tab === "products" && (
-          <div className="space-y-3">
-            {role === "admin" && (
-              <div className="eg-card !p-3 flex flex-wrap items-end gap-2">
-                <div className="flex-1 min-w-[180px]">
-                  <Field label="المنتج القياسي">
-                    <select value={addProductId} onChange={e => setAddProductId(e.target.value)} className="eg-select !py-1.5 !text-xs">
-                      <option value="">— اختر منتج —</option>
-                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  </Field>
-                </div>
-                <div className="w-24">
-                  <Field label="الكمية">
-                    <input type="number" min="0.01" step="any" value={addProductQty}
-                      onChange={e => setAddProductQty(e.target.value)} className="eg-input !py-1.5 !text-xs" />
-                  </Field>
-                </div>
-                <button onClick={addProduct} disabled={savingProduct || !addProductId} className="eg-btn-primary !py-1.5 !text-xs">
-                  <Plus className="w-3.5 h-3.5" />{savingProduct ? "..." : "إضافة"}
-                </button>
-              </div>
-            )}
-            {woProducts.length ? (
-              <div className="eg-card !p-0 overflow-hidden">
-                <table className="w-full text-xs border-collapse">
-                  <thead><tr className="bg-card2 text-subtext">
-                    <th className="px-4 py-2 text-right font-semibold">المنتج</th>
-                    <th className="px-4 py-2 text-right font-semibold">الكمية</th>
-                    {role === "admin" && <th className="w-16" />}
-                  </tr></thead>
-                  <tbody>
-                    {woProducts.map((wp: any) => (
-                      <tr key={wp.id} className="border-t border-border/40 hover:bg-card2/50">
-                        <td className="px-4 py-1.5 text-text font-medium">{wp.standard_product?.name ?? "—"}</td>
-                        <td className="px-4 py-1.5 tabular-nums">{wp.quantity}</td>
-                        {role === "admin" && (
-                          <td className="px-4 py-1.5">
-                            <button onClick={() => removeProduct(wp.id)} className="text-subtext hover:text-danger" title="حذف">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : <div className="eg-card"><EmptyState message="لا توجد منتجات مربوطة بهذا الأمر بعد" /></div>}
-          </div>
         )}
 
         {/* ═══ قائمة الإنتاج ═══ */}
