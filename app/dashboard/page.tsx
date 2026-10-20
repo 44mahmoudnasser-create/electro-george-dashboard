@@ -12,47 +12,44 @@ export default async function DashboardPage() {
   if (!user) redirect("/login");
 
   const isManager = role === "manager";
-
   const today = new Date().toISOString().split("T")[0];
   const thisMonth = today.slice(0, 7);
 
-  // attendance query — مفلترة بالقسم لو مش manager
+  // الحضور اليومي — مفلتر بالقسم لو مش manager
   let attendanceQuery = supabase
     .from("attendance")
-    .select("*, technician:technicians!inner(name,route,department)")
+    .select("id, status, technician:technicians!inner(name, department)")
     .eq("date", today);
-  if (!isManager) {
-    attendanceQuery = attendanceQuery.eq("technician.department", department);
-  }
+  if (!isManager) attendanceQuery = attendanceQuery.eq("technician.department", department);
 
-  // violations query — مفلترة بالقسم لو مش manager
+  // المخالفات — بنحتاج عددها بس للتنبيهات
   let violationsQuery = supabase
     .from("violations")
-    .select("*, technician:technicians!inner(name,department)")
+    .select("id, date, technician:technicians!inner(department)")
+    .gte("date", `${thisMonth}-01`)
     .order("date", { ascending: false });
-  if (!isManager) {
-    violationsQuery = violationsQuery.eq("technician.department", department);
-  }
+  if (!isManager) violationsQuery = violationsQuery.eq("technician.department", department);
 
-  const [
-    { data: wos },
-    { data: attendance },
-    { data: purchases },
-    { data: violations },
-  ] = await Promise.all([
-    supabase.from("work_orders").select("*").order("id", { ascending: false }),
+  const [{ data: wos }, { data: attendance }, { data: purchaseItems }, { data: violations }] = await Promise.all([
+    supabase.from("work_orders")
+      .select("id, wo_number, description, status, priority, plan_month, expected_delivery, completion_date, department")
+      .order("expected_delivery", { ascending: true, nullsFirst: false }),
     attendanceQuery,
-    supabase.from("purchases").select("*, work_order:work_orders(wo_number)").order("id", { ascending: false }),
+    supabase.from("purchase_items")
+      .select("id, item_name, status, supply_date, purchase_order:purchase_orders(order_no, work_order:work_orders(wo_number))")
+      .neq("status", "ملغي")
+      .order("id", { ascending: false })
+      .limit(300),
     violationsQuery,
   ]);
 
   return (
     <AppShell role={role}>
       <DashboardClient
-        wos={wos ?? []}
-        attendance={attendance ?? []}
-        purchases={purchases ?? []}
-        violations={violations ?? []}
+        wos={(wos ?? []) as any[]}
+        attendance={(attendance ?? []) as any[]}
+        purchaseItems={(purchaseItems ?? []) as any[]}
+        violationsThisMonth={violations?.length ?? 0}
         today={today}
         thisMonth={thisMonth}
         role={role}

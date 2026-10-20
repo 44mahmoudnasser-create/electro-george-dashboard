@@ -1,353 +1,367 @@
 "use client";
-import { useState, useMemo } from "react";
-import { WorkOrder, Purchase, Attendance, Violation } from "@/types";
-import KpiCard from "@/components/ui/KpiCard";
-import Modal from "@/components/ui/Modal";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 import Badge from "@/components/ui/Badge";
+import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
+import { AlertTriangle, CheckCircle2, RotateCcw, ChevronLeft, PackageCheck } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-/* ── helpers ── */
-const STATUSES = ["لم يبدأ","جاري","متوقف","مكتمل","تم التسليم"];
-const STATUS_ICONS: Record<string,string> = {
-  "لم يبدأ":"⚪","جاري":"🔵","متوقف":"🟡","مكتمل":"🟢","تم التسليم":"✅"
+/* ═══════════════ ثوابت ═══════════════ */
+
+const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
+const DONE = ["مكتمل", "تم التسليم"];
+const PRIORITY_STYLE: Record<string, string> = {
+  "عاجلة": "bg-danger/15 text-danger",
+  "عالية": "bg-warning/15 text-warning",
+  "متوسطة": "bg-accent/15 text-accent",
+  "منخفضة": "bg-card2 text-subtext",
+};
+
+type WO = {
+  id: number; wo_number: string; description: string | null; status: string;
+  priority: string | null; plan_month: string | null; expected_delivery: string | null;
+  completion_date: string | null; department: string | null;
+};
+type Att = { id: number; status: string; technician?: { name: string; department: string | null } };
+type PurchaseItem = {
+  id: number; item_name: string; status: string; supply_date: string | null;
+  purchase_order?: { order_no: string | null; work_order?: { wo_number: string } | null } | null;
 };
 
 export default function DashboardClient({
-  wos, attendance, purchases, violations, today, thisMonth, role
+  wos, attendance, purchaseItems, violationsThisMonth, today, thisMonth, role,
 }: {
-  wos: WorkOrder[];
-  attendance: (Attendance & { technician?: { name:string; route:string; department?:string } })[];
-  purchases: (Purchase & { work_order?: { wo_number:string } })[];
-  violations: (Violation & { technician?: { name:string }; date?: string })[];
-  today: string; thisMonth: string; role: string;
+  wos: WO[]; attendance: Att[]; purchaseItems: PurchaseItem[];
+  violationsThisMonth: number; today: string; thisMonth: string; role: string;
 }) {
-  const [modal, setModal] = useState<{ type:string; data?:unknown[] } | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState(thisMonth); // صيغة "YYYY-MM"، المستخدم بيختارها من الـ selector
+  const router = useRouter();
+  const canDeliver = role === "admin" || role === "manager";
 
-  const isManager = role === "manager";
+  const [month, setMonth] = useState(thisMonth);
+  const [statusFilter, setStatusFilter] = useState<string>("الكل");
+  const [list, setList] = useState<WO[]>(wos);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // تأكيد إلغاء التسليم
+  const [undoTarget, setUndoTarget] = useState<WO | null>(null);
+  const [undoReason, setUndoReason] = useState("");
 
   const monthLabel = useMemo(() => {
-    const [y, m] = selectedMonth.split("-").map(Number);
-    if (!y || !m) return selectedMonth;
+    const [y, m] = month.split("-").map(Number);
+    if (!y || !m) return month;
     return new Date(y, m - 1, 1).toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
-  }, [selectedMonth]);
+  }, [month]);
 
-  /* ── KPI calculations ── */
-  const totalWOs   = wos.length;
-  const activeWOs  = wos.filter(w => w.status === "جاري").length;
-  const doneWOs    = wos.filter(w => w.status === "مكتمل").length;
-  const lateWOs    = wos.filter(w =>
-    w.expected_delivery && w.expected_delivery < today &&
-    !["مكتمل","تم التسليم"].includes(w.status)).length;
-  const lateWOList = wos.filter(w =>
-    w.expected_delivery && w.expected_delivery < today &&
-    !["مكتمل","تم التسليم"].includes(w.status));
-
-  const presentToday  = attendance.filter(a => a.status === "حاضر").length;
-  const absentToday   = attendance.filter(a => a.status === "غياب");
-  const missionToday  = attendance.filter(a => a.status === "مأمورية").length;
-  const leaveToday    = attendance.filter(a => a.status === "أجازة").length;
-
-  const openPur   = purchases.filter(p => p.status === "مفتوح").length;
-  const donePur   = purchases.filter(p => p.status === "تم التوريد").length;
-  const latePur   = purchases.filter(p => p.supply_date && p.supply_date < today && p.status === "مفتوح");
-  const totalPur  = purchases.length;
-
-  const doneThisMonth = wos.filter(w =>
-    w.completion_date && w.completion_date.startsWith(selectedMonth)).length;
-  const remaining = wos.filter(w => !["مكتمل","تم التسليم"].includes(w.status)).length;
-
-  /* ── الأوامر المطلوب تسليمها في الشهر المختار ── */
-  const expectedDeliveries = useMemo(() =>
-    wos.filter(wo => wo.expected_delivery && wo.expected_delivery.startsWith(selectedMonth)),
-    [wos, selectedMonth]);
-
-  /* ── مخالفات الشهر المختار ── */
-  const monthlyViolations = useMemo(() =>
-    violations.filter(v => v.date && v.date.startsWith(selectedMonth)),
-    [violations, selectedMonth]);
-
-  /* ── Monthly Expected Breakdown ── */
-  const monthlyStats = useMemo(() => {
-    const stats: Record<string, number> = { "لم يبدأ": 0, "جاري": 0, "متوقف": 0, "مكتمل": 0, "تم التسليم": 0 };
-    expectedDeliveries.forEach(wo => {
-      const st = wo.status || "لم يبدأ";
-      stats[st] = (stats[st] || 0) + 1;
+  const todayLabel = useMemo(() => {
+    const [y, m, d] = today.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("ar-EG", {
+      weekday: "long", day: "numeric", month: "long", timeZone: "UTC",
     });
-    return stats;
-  }, [expectedDeliveries]);
+  }, [today]);
 
-  /* ── WO by status ── */
-  const byStatus = useMemo(() =>
-    STATUSES.map(st => ({
-      status: st,
-      list: wos.filter(w => w.status === st),
-    })), [wos]);
+  const flash = (ok: boolean, text: string) => {
+    setNotice({ ok, text });
+    setTimeout(() => setNotice(null), 3000);
+  };
 
-  /* ── Alerts ── */
-  const alerts: { text:string; color:string }[] = [];
-  if (lateWOs > 0) alerts.push({ text:`⚠️ ${lateWOs} أمر شغل متأخر عن موعد التسليم`, color:"text-danger" });
-  const stopped = wos.filter(w => w.status === "متوقف").length;
-  if (stopped > 0) alerts.push({ text:`⛔ ${stopped} أمر شغل متوقف`, color:"text-warning" });
-  if (latePur.length > 0) alerts.push({ text:`📦 ${latePur.length} طلب شراء متأخر`, color:"text-warning" });
-  if (absentToday.length > 2) alerts.push({ text:`👤 ${absentToday.length} غائبين اليوم`, color:"text-danger" });
-  if (monthlyViolations.length > 3) alerts.push({ text:`🚫 ${monthlyViolations.length} مخالفة في ${monthLabel}`, color:"text-warning" });
-  if (alerts.length === 0) alerts.push({ text:"✅ لا توجد تنبيهات حرجة", color:"text-success" });
+  /* ═══════════════ الأوامر المخططة للشهر (plan_month) ═══════════════ */
+  const planned = useMemo(() => list.filter(w => w.plan_month === month), [list, month]);
 
-  const open = (type:string, data?:unknown[]) => setModal({ type, data });
-  const close = () => setModal(null);
+  const isLate = (w: WO) => !!w.expected_delivery && w.expected_delivery < today && !DONE.includes(w.status);
 
-  /* ── يجمع array من attendance حسب القسم (للمدير بس) ── */
-  const groupByDept = (list: (Attendance & { technician?: { name:string; route:string; department?:string } })[]) => {
-    const groups: Record<string, typeof list> = {};
-    list.forEach(item => {
-      const dept = item.technician?.department ?? "غير محدد";
-      if (!groups[dept]) groups[dept] = [];
-      groups[dept].push(item);
+  const kpi = useMemo(() => ({
+    total: planned.length,
+    delivered: planned.filter(w => w.status === "تم التسليم").length,
+    inProgress: planned.filter(w => w.status === "جاري").length,
+    late: planned.filter(isLate).length,
+  }), [planned, today]);
+
+  const progressPct = kpi.total ? Math.round((kpi.delivered / kpi.total) * 100) : 0;
+
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    STATUSES.forEach(s => (c[s] = 0));
+    planned.forEach(w => { c[w.status] = (c[w.status] ?? 0) + 1; });
+    return c;
+  }, [planned]);
+
+  const tableRows = useMemo(() => planned
+    .filter(w => statusFilter === "الكل" || w.status === statusFilter)
+    .sort((a, b) => {
+      // المتأخر الأول، بعدين غير المكتمل، بعدين المكتمل
+      const rank = (w: WO) => (isLate(w) ? 0 : DONE.includes(w.status) ? 2 : 1);
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);
+      return (a.expected_delivery ?? "9999").localeCompare(b.expected_delivery ?? "9999");
+    }), [planned, statusFilter, today]);
+
+  /* ═══════════════ تنبيهات تحتاج قرار ═══════════════ */
+  const alerts = useMemo(() => {
+    const out: { text: string; tone: "danger" | "warning" | "ok"; href?: string }[] = [];
+    if (kpi.late > 0) out.push({ text: `${kpi.late} أمر شغل متأخر عن موعد التسليم`, tone: "danger" });
+    const stopped = planned.filter(w => w.status === "متوقف").length;
+    if (stopped > 0) out.push({ text: `${stopped} أمر شغل متوقف`, tone: "warning" });
+    const latePurchases = purchaseItems.filter(p => p.status === "مفتوح" && p.supply_date && p.supply_date < today);
+    if (latePurchases.length > 0) out.push({ text: `${latePurchases.length} صنف شراء متأخر التوريد`, tone: "warning", href: "/purchases" });
+    const absent = attendance.filter(a => a.status === "غياب").length;
+    if (absent > 2) out.push({ text: `${absent} غياب اليوم`, tone: "warning", href: "/attendance" });
+    if (violationsThisMonth > 3) out.push({ text: `${violationsThisMonth} مخالفة هذا الشهر`, tone: "warning", href: "/violations" });
+    if (out.length === 0) out.push({ text: "لا توجد تنبيهات تحتاج قرار", tone: "ok" });
+    return out;
+  }, [kpi.late, planned, purchaseItems, attendance, violationsThisMonth, today]);
+
+  /* ═══════════════ الحضور اليوم ═══════════════ */
+  const att = useMemo(() => {
+    const c = (s: string) => attendance.filter(a => a.status === s).length;
+    return { present: c("حاضر"), absent: c("غياب"), mission: c("مأمورية"), leave: c("أجازة") };
+  }, [attendance]);
+
+  const openPurchases = purchaseItems.filter(p => p.status === "مفتوح").length;
+
+  /* ═══════════════ تسليم / إلغاء تسليم ═══════════════ */
+  const updateWO = async (w: WO, patch: Partial<WO>) => {
+    setBusyId(w.id);
+    const { error } = await supabase.from("work_orders").update(patch).eq("id", w.id);
+    setBusyId(null);
+    if (error) { flash(false, error.message); return false; }
+    setList(prev => prev.map(x => x.id === w.id ? { ...x, ...patch } : x));
+    return true;
+  };
+
+  const deliver = async (w: WO) => {
+    const ok = await updateWO(w, {
+      status: "تم التسليم",
+      completion_date: w.completion_date ?? today,
     });
-    return groups;
+    if (ok) flash(true, `تم تسليم ${w.wo_number}`);
+  };
+
+  const confirmUndo = async () => {
+    if (!undoTarget) return;
+    // الإلغاء بيرجع الأمر لـ "مكتمل" (مش بيمسح تاريخ الإتمام)
+    const ok = await updateWO(undoTarget, { status: "مكتمل" });
+    if (ok) flash(true, `تم إلغاء تسليم ${undoTarget.wo_number}`);
+    setUndoTarget(null);
+    setUndoReason("");
   };
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-text">لوحة التحكم</h1>
-          <p className="text-sm text-subtext mt-0.5">{today}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-subtext whitespace-nowrap">عرض بيانات شهر:</label>
-          <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
-            className="eg-input !w-auto" />
-          {selectedMonth !== thisMonth && (
-            <button onClick={() => setSelectedMonth(thisMonth)} className="text-xs text-accent hover:underline whitespace-nowrap">
-              الرجوع للشهر الحالي
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
-        <KpiCard label="إجمالي أوامر الشغل" value={totalWOs}  color="text-accent"  onClick={() => open("all-wos", wos)} />
-        <KpiCard label="جاري التنفيذ"       value={activeWOs} color="text-accent2" onClick={() => open("wo-status", wos.filter(w=>w.status==="جاري"))} />
-        <KpiCard label="مكتملة"              value={doneWOs}   color="text-success" onClick={() => open("wo-status", wos.filter(w=>w.status==="مكتمل"))} />
-        <KpiCard label="متأخرة"              value={lateWOs}   color="text-danger"  onClick={() => open("late-wos", lateWOList)} />
-        <KpiCard label="حاضرون اليوم"        value={presentToday} color="text-success" onClick={() => open("present", attendance.filter(a=>a.status==="حاضر"))} />
-        <KpiCard label="غائبون اليوم"        value={absentToday.length} color="text-warning" onClick={() => open("absent", absentToday)} />
-        <KpiCard label="طلبات شراء مفتوحة"  value={openPur}   color="text-warning" onClick={() => open("open-pur", purchases.filter(p=>p.status==="مفتوح"))} />
-      </div>
-
-      {/* ── المطلوب تسليمه هذا الشهر (السكشن الجديد) ── */}
-      <section className="eg-card">
-        <div className="flex items-center justify-between mb-4">
+    <div className="max-w-6xl mx-auto">
+      {/* ═══ الهيدر ═══ */}
+      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h2 className="font-bold text-text text-lg">📅 المطلوب تسليمه في {monthLabel}</h2>
-            <p className="text-xs text-subtext mt-0.5">إجمالي الأوامر المستهدفة للتسليم خلال الشهر المختار</p>
+            <h1 className="text-lg font-bold text-text">لوحة المصنع</h1>
+            <p className="text-[11px] text-subtext">{todayLabel}</p>
           </div>
-          <button 
-            onClick={() => open("wo-status", expectedDeliveries)}
-            className="text-xs text-accent hover:underline font-medium">
-            عرض الكل ({expectedDeliveries.length})
-          </button>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {STATUSES.map(st => {
-            const count = monthlyStats[st] || 0;
-            return (
-              <button key={st}
-                onClick={() => open("wo-status", expectedDeliveries.filter(w => (w.status || "لم يبدأ") === st))}
-                className="bg-card2 rounded-xl p-4 text-center border border-border/50
-                           hover:border-accent/40 transition-all cursor-pointer group">
-                <div className="text-xl mb-1">{STATUS_ICONS[st]}</div>
-                <div className="text-xl font-bold text-text group-hover:text-accent transition-colors">
-                  {count}
-                </div>
-                <div className="text-xs text-subtext mt-1">{st}</div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* ── WO Status Breakdown ── */}
-      <section className="eg-card">
-        <h2 className="font-bold text-text mb-4">📋 توزيع أوامر الشغل العام — اضغط على أي تصنيف للتفاصيل</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-          {byStatus.map(({ status, list }) => (
-            <button key={status}
-              onClick={() => open("wo-status", list)}
-              className="bg-card2 rounded-xl p-4 text-center border border-border/50
-                         hover:border-accent/40 transition-all cursor-pointer group">
-              <div className="text-2xl mb-1">{STATUS_ICONS[status]}</div>
-              <div className="text-2xl font-bold text-text group-hover:text-accent transition-colors">
-                {list.length}
-              </div>
-              <div className="text-xs text-subtext mt-1">{status}</div>
-              <div className="text-xs text-subtext/60">
-                {totalWOs ? Math.round(list.length/totalWOs*100) : 0}%
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Progress + Labour ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Progress */}
-        <div className="eg-card">
-          <h2 className="font-bold text-text mb-4">📈 متابعة الإنجاز</h2>
-          <div className="space-y-3">
-            {[
-              { label:`مكتملة في ${monthLabel}`, value:doneThisMonth, color:"text-success", items: wos.filter(w=>w.completion_date?.startsWith(selectedMonth)) },
-              { label:"متبقية", value:remaining, color:"text-accent",  items: wos.filter(w=>!["مكتمل","تم التسليم"].includes(w.status)) },
-              { label:"متأخرة", value:lateWOs,   color:"text-danger",  items: lateWOList },
-            ].map(r => (
-              <button key={r.label} onClick={() => open("wo-status", r.items)}
-                className="flex items-center justify-between w-full bg-card2 rounded-lg px-4 py-3
-                           hover:bg-border/30 transition-all group">
-                <span className={`text-xl font-bold ${r.color}`}>{r.value}</span>
-                <span className="text-sm text-subtext group-hover:text-text transition-colors">{r.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Labour */}
-        <div className="eg-card">
-          <h2 className="font-bold text-text mb-4">👷 متابعة العمالة اليوم</h2>
-          <div className="space-y-3">
-            {[
-              { label:"حاضر",    value:presentToday, color:"text-success", filter:"حاضر" },
-              { label:"غائب",    value:absentToday.length, color:"text-danger", filter:"غياب" },
-              { label:"مأمورية", value:missionToday, color:"text-accent",  filter:"مأمورية" },
-              { label:"إجازة",   value:leaveToday,   color:"text-warning", filter:"أجازة" },
-              { label:`جزاءات ${monthLabel}`, value:monthlyViolations.length, color:"text-danger", filter:"" },
-            ].map(r => (
-              <button key={r.label}
-                onClick={() => open("att-filter", r.filter
-                  ? attendance.filter(a=>a.status===r.filter)
-                  : monthlyViolations)}
-                className="flex items-center justify-between w-full bg-card2 rounded-lg px-4 py-3
-                           hover:bg-border/30 transition-all group">
-                <span className={`text-xl font-bold ${r.color}`}>{r.value}</span>
-                <span className="text-sm text-subtext group-hover:text-text transition-colors">{r.label}</span>
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <input type="month" value={month} onChange={e => setMonth(e.target.value)}
+              className="eg-input !py-1.5 !text-xs w-40" />
+            {month !== thisMonth && (
+              <button onClick={() => setMonth(thisMonth)} className="text-xs text-accent hover:underline">الشهر الحالي</button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ── Purchases + Alerts ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Purchases */}
-        <div className="eg-card">
-          <h2 className="font-bold text-text mb-4">🛒 طلبات الشراء</h2>
-          <div className="space-y-3">
-            {[
-              { label:"إجمالي الطلبات", value:totalPur,       color:"text-accent",  items:purchases },
-              { label:"مفتوحة",        value:openPur,        color:"text-warning", items:purchases.filter(p=>p.status==="مفتوح") },
-              { label:"تم التوريد",    value:donePur,        color:"text-success", items:purchases.filter(p=>p.status==="تم التوريد") },
-              { label:"متأخرة",        value:latePur.length, color:"text-danger",  items:latePur },
-            ].map(r => (
-              <button key={r.label} onClick={() => open("purchases", r.items)}
-                className="flex items-center justify-between w-full bg-card2 rounded-lg px-4 py-3
-                           hover:bg-border/30 transition-all group">
-                <span className={`text-xl font-bold ${r.color}`}>{r.value}</span>
-                <span className="text-sm text-subtext group-hover:text-text transition-colors">{r.label}</span>
-              </button>
-            ))}
+      <div className="p-4 md:p-6 space-y-5">
+        {notice && (
+          <div className={cn("text-xs px-3 py-2 rounded-lg border",
+            notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
+            {notice.text}
+          </div>
+        )}
+
+        {/* ═══ الكروت الأساسية (الشهر المختار) ═══ */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <Kpi label={`مخطط لـ ${monthLabel}`} value={kpi.total} />
+          <Kpi label="تم تسليمه" value={kpi.delivered} tone="success" sub={`${progressPct}% من الخطة`} />
+          <Kpi label="جاري الآن" value={kpi.inProgress} tone="accent" />
+          <Kpi label="متأخر" value={kpi.late} tone={kpi.late ? "danger" : "muted"} />
+        </div>
+
+        {/* شريط التقدم */}
+        <div className="eg-card !p-4">
+          <div className="flex items-center justify-between text-xs mb-2">
+            <span className="text-subtext">نسبة التسليم من خطة {monthLabel}</span>
+            <span className="font-bold text-text tabular-nums">{kpi.delivered} / {kpi.total}</span>
+          </div>
+          <div className="h-2 rounded-full bg-card2 overflow-hidden">
+            <div className="h-full bg-success transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
 
-        {/* Alerts */}
-        <div className="eg-card">
-          <h2 className="font-bold text-text mb-4">🔔 لوحة التنبيهات</h2>
-          <div className="space-y-2">
-            {alerts.map((a, i) => (
-              <div key={i} className="bg-card2 rounded-lg px-4 py-3">
-                <p className={`text-sm font-medium ${a.color}`}>{a.text}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Modals ── */}
-      <Modal open={!!modal && ["all-wos","wo-status","late-wos"].includes(modal.type)}
-        onClose={close} title="أوامر الشغل" size="lg">
-        <div className="overflow-x-auto">
-          <table className="eg-table">
-            <thead><tr><th>رقم الأمر</th><th>الحالة</th><th>التسليم المتوقع</th><th>الإتمام</th></tr></thead>
-            <tbody>
-              {((modal?.data ?? []) as WorkOrder[]).map((w:WorkOrder) => (
-                <tr key={w.id}>
-                  <td className="font-mono text-accent">{w.wo_number}</td>
-                  <td><Badge label={w.status} /></td>
-                  <td>{w.expected_delivery ?? "—"}</td>
-                  <td>{w.completion_date ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {(modal?.data?.length ?? 0) === 0 && <EmptyState />}
-        </div>
-      </Modal>
-
-      <Modal open={!!modal && ["present","absent","att-filter"].includes(modal.type)}
-        onClose={close} title="تفاصيل الحضور">
-        <div className="space-y-4">
-          {isManager ? (
-            // للمدير: مقسمة حسب القسم
-            Object.entries(groupByDept((modal?.data ?? []) as any)).map(([dept, items]) => (
-              <div key={dept}>
-                <h3 className="text-sm font-bold text-accent mb-2 border-b border-border/40 pb-1">
-                  📁 {dept} ({items.length})
-                </h3>
-                <div className="space-y-2">
-                  {items.map((a, i) => (
-                    <div key={i} className="flex items-center justify-between bg-card2 rounded-lg px-4 py-3">
-                      <Badge label={a.status} />
-                      <span className="text-sm text-text">{a.technician?.name ?? "—"}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))
-          ) : (
-            // لغير المدير: قايمة عادية زي الأول
-            <div className="space-y-2">
-              {((modal?.data ?? []) as (Attendance & {technician?:{name:string;route:string;department?:string};})[]).map((a,i) => (
-                <div key={i} className="flex items-center justify-between bg-card2 rounded-lg px-4 py-3">
-                  <Badge label={a.status} />
-                  <span className="text-sm text-text">{a.technician?.name ?? "—"}</span>
-                </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          {/* ═══ جدول الخطة ═══ */}
+          <div className="lg:col-span-2 space-y-3">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {[{ key: "الكل", n: kpi.total }, ...STATUSES.map(s => ({ key: s, n: statusCounts[s] ?? 0 }))].map(({ key, n }) => (
+                <button key={key} onClick={() => setStatusFilter(key)}
+                  className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap border transition-colors",
+                    statusFilter === key ? "bg-accent/15 border-accent/60 text-accent font-semibold"
+                      : "bg-card2 border-border text-subtext hover:text-text")}>
+                  {key}<span className="tabular-nums opacity-70">{n}</span>
+                </button>
               ))}
             </div>
-          )}
-          {(modal?.data?.length ?? 0) === 0 && <EmptyState />}
-        </div>
-      </Modal>
 
-      <Modal open={!!modal && modal.type === "purchases"} onClose={close} title="طلبات الشراء" size="lg">
-        <div className="overflow-x-auto">
-          <table className="eg-table">
-            <thead><tr><th>الصنف</th><th>أمر الشغل</th><th>الكمية</th><th>التوريد</th><th>الحالة</th></tr></thead>
-            <tbody>
-              {((modal?.data ?? []) as (Purchase & {work_order?:{wo_number:string}})[]).map((p,i) => (
-                <tr key={i}>
-                  <td>{p.item_name}</td>
-                  <td className="font-mono text-accent">{p.work_order?.wo_number ?? "—"}</td>
-                  <td>{p.qty}</td>
-                  <td>{p.supply_date ?? "—"}</td>
-                  <td><Badge label={p.status} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {(modal?.data?.length ?? 0) === 0 && <EmptyState />}
+            <div className="eg-card !p-0 overflow-hidden">
+              {tableRows.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse min-w-[560px]">
+                    <thead>
+                      <tr className="bg-card2 text-subtext">
+                        <th className="px-4 py-2 text-right font-semibold">أمر الشغل</th>
+                        <th className="px-3 py-2 text-right font-semibold">الحالة</th>
+                        <th className="px-3 py-2 text-right font-semibold">التسليم المتوقع</th>
+                        <th className="px-3 py-2 text-left font-semibold w-36">إجراء</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableRows.map(w => {
+                        const late = isLate(w);
+                        const done = w.status === "تم التسليم";
+                        const busy = busyId === w.id;
+                        return (
+                          <tr key={w.id} className="border-t border-border/40 hover:bg-card2/50">
+                            <td className="px-4 py-2 cursor-pointer" onClick={() => router.push(`/work-orders/${w.id}`)}>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-semibold text-accent">{w.wo_number}</span>
+                                {w.priority && (
+                                  <span className={cn("text-[10px] px-1.5 py-0.5 rounded", PRIORITY_STYLE[w.priority] ?? PRIORITY_STYLE["منخفضة"])}>{w.priority}</span>
+                                )}
+                              </div>
+                              {w.description && <div className="text-[11px] text-subtext truncate max-w-[280px]">{w.description}</div>}
+                            </td>
+                            <td className="px-3 py-2"><Badge label={w.status} /></td>
+                            <td className={cn("px-3 py-2 tabular-nums", late ? "text-danger font-semibold" : "text-subtext")}>
+                              {w.expected_delivery ?? "—"}{late && <span className="mr-1 text-[10px]">· متأخر</span>}
+                            </td>
+                            <td className="px-3 py-2 text-left">
+                              {!canDeliver ? null : done ? (
+                                <button onClick={() => { setUndoTarget(w); setUndoReason(""); }} disabled={busy}
+                                  className="inline-flex items-center gap-1 text-warning hover:underline disabled:opacity-40">
+                                  <RotateCcw className="w-3.5 h-3.5" />إلغاء التسليم
+                                </button>
+                              ) : w.status === "مكتمل" ? (
+                                <button onClick={() => deliver(w)} disabled={busy}
+                                  className="inline-flex items-center gap-1 text-success hover:underline disabled:opacity-40">
+                                  <PackageCheck className="w-3.5 h-3.5" />تسليم
+                                </button>
+                              ) : (
+                                <span className="text-subtext">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <EmptyState message={planned.length ? "لا توجد أوامر بهذه الحالة" : `مفيش أوامر مخططة لـ ${monthLabel}`} />}
+            </div>
+          </div>
+
+          {/* ═══ الجانب ═══ */}
+          <div className="space-y-4">
+            <div className="eg-card !p-4 space-y-3">
+              <h2 className="text-sm font-bold text-text flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-warning" />تحتاج قرار
+              </h2>
+              <ul className="space-y-2">
+                {alerts.map((a, i) => (
+                  <li key={i} className="flex items-start justify-between gap-2 text-xs">
+                    <span className={cn(
+                      a.tone === "danger" ? "text-danger" : a.tone === "warning" ? "text-warning" : "text-success"
+                    )}>{a.text}</span>
+                    {a.href && (
+                      <button onClick={() => router.push(a.href!)} className="text-subtext hover:text-accent shrink-0">
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="eg-card !p-4 space-y-3">
+              <h2 className="text-sm font-bold text-text">حضور اليوم</h2>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <Mini label="حاضر" value={att.present} tone="success" />
+                <Mini label="غياب" value={att.absent} tone="danger" />
+                <Mini label="مأمورية" value={att.mission} tone="accent" />
+                <Mini label="إجازة" value={att.leave} tone="warning" />
+              </div>
+              <button onClick={() => router.push("/attendance")} className="text-xs text-accent hover:underline">
+                تفاصيل الحضور ←
+              </button>
+            </div>
+
+            <button onClick={() => router.push("/purchases")}
+              className="eg-card !p-4 w-full text-right flex items-center justify-between hover:border-accent/40 transition-colors">
+              <div>
+                <p className="text-xs text-subtext">طلبات الشراء المفتوحة</p>
+                <p className="text-xl font-bold text-text tabular-nums">{openPurchases}</p>
+              </div>
+              <ChevronLeft className="w-4 h-4 text-subtext" />
+            </button>
+          </div>
         </div>
+      </div>
+
+      {/* ═══ تأكيد إلغاء التسليم ═══ */}
+      <Modal open={!!undoTarget} onClose={() => setUndoTarget(null)} title="إلغاء التسليم" size="sm">
+        {undoTarget && (
+          <div className="space-y-4">
+            <div className="bg-card2 rounded-lg p-3 text-xs space-y-1">
+              <p className="text-text font-semibold font-mono">{undoTarget.wo_number}</p>
+              {undoTarget.description && <p className="text-subtext">{undoTarget.description}</p>}
+              <p className="text-subtext">هيرجع للحالة <span className="text-text">مكتمل</span>. تاريخ الإتمام مش هيتمسح.</p>
+            </div>
+            <div>
+              <label className="eg-label">سبب الإلغاء (اختياري)</label>
+              <input value={undoReason} onChange={e => setUndoReason(e.target.value)} className="eg-input"
+                placeholder="مثال: العميل رجّع الأمر لتعديل بسيط" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setUndoTarget(null)} className="eg-btn-ghost flex-1 justify-center">تراجع</button>
+              <button onClick={confirmUndo} disabled={busyId !== null} className="eg-btn-danger flex-1 justify-center">
+                <CheckCircle2 className="w-4 h-4" />تأكيد الإلغاء
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
+    </div>
+  );
+}
+
+/* ═══════════════ مكونات صغيرة ═══════════════ */
+
+const TONES: Record<string, string> = {
+  success: "text-success", danger: "text-danger", warning: "text-warning",
+  accent: "text-accent", muted: "text-subtext", default: "text-text",
+};
+
+function Kpi({ label, value, sub, tone = "default" }: {
+  label: string; value: number; sub?: string; tone?: keyof typeof TONES;
+}) {
+  return (
+    <div className="eg-card !p-4">
+      <div className={cn("text-2xl font-bold tabular-nums", TONES[tone])}>{value}</div>
+      <div className="text-[11px] text-subtext mt-0.5">{label}</div>
+      {sub && <div className="text-[10px] text-subtext/80 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+function Mini({ label, value, tone }: { label: string; value: number; tone: keyof typeof TONES }) {
+  return (
+    <div className="bg-card2 rounded-lg py-2">
+      <div className={cn("text-lg font-bold tabular-nums", TONES[tone])}>{value}</div>
+      <div className="text-[10px] text-subtext">{label}</div>
     </div>
   );
 }
