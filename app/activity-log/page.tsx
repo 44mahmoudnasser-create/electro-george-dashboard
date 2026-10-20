@@ -5,33 +5,25 @@ import AppShell from "@/components/layout/AppShell";
 import ActivityLogClient from "./ActivityLogClient";
 export const dynamic = "force-dynamic";
 
-const TABLE_LABELS: Record<string, string> = {
-  technicians: "الفنيين",
-  work_orders: "أوامر الشغل",
-  purchases: "طلبات الشراء",
-  files: "الملفات",
-  attendance: "الحضور",
-  violations: "المخالفات",
-  skills: "المهارات",
-  wo_bom_items: "BOM",
-  wo_production_items: "قائمة الإنتاج",
-};
-
 export default async function ActivityLogPage() {
   const supabase = createSupabaseServerClient();
   const { user, role } = await getUserRole();
   if (!user) redirect("/login");
   if (role !== "manager" && role !== "admin") redirect("/dashboard");
 
-  const { data: logs } = await supabase
-    .from("activity_log")
-    .select("*, user:app_users(full_name, email)")
-    .order("created_at", { ascending: false })
-    .limit(300);
+  const [{ data: logs }, { data: techs }] = await Promise.all([
+    supabase.from("activity_log")
+      .select("id, table_name, record_id, action, department, old_data, new_data, created_at, user:app_users(full_name, email)")
+      .order("created_at", { ascending: false })
+      .limit(500),
+    supabase.from("technicians").select("id, name"),
+  ]);
+
+  const techNames: Record<string, string> = Object.fromEntries((techs ?? []).map(t => [String(t.id), t.name]));
 
   return (
     <AppShell role={role}>
-      <ActivityLogClient logs={logs ?? []} tableLabels={TABLE_LABELS} />
+      <ActivityLogClient logs={(logs ?? []) as any[]} techNames={techNames} />
     </AppShell>
   );
 }
