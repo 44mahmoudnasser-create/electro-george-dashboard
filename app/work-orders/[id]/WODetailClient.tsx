@@ -89,7 +89,7 @@ export default function WODetailClient({
   const [desc, setDesc] = useState<string>(wo.description ?? "");
 
   // ── حالة الأقسام + الحالة العامة (من الداتابيز) ──
-  const canSetStatus = role === "admin" || role === "manager";
+  const canSetStatus = role === "manager"; // الحالة العامة للأمر والتعديل على كل الأقسام: المدير بس
   const [deptRows, setDeptRows] = useState(deptStatus);
   const [statusConfirm, setStatusConfirm] = useState<{ next: string; incomplete: string[] } | null>(null);
 
@@ -459,7 +459,7 @@ export default function WODetailClient({
           </div>
           <div className="divide-y divide-border/40">
             {deptRows.map(d => {
-              const mine = canSetStatus || myDeptCode === d.department;
+              const mine = role === "manager" || myDeptCode === d.department;
               return (
                 <div key={d.department} className="flex items-center justify-between gap-3 py-2">
                   <div className="min-w-0">
@@ -476,7 +476,7 @@ export default function WODetailClient({
               );
             })}
           </div>
-          {!canSetStatus && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
+          {role !== "manager" && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
         </div>
 
         {/* ═══ وصف الأمر ═══ */}
