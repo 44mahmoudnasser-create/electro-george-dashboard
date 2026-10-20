@@ -70,10 +70,11 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, initialProdItems, initialBomItems, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  initialProdItems: any[];
+  initialProdItems: any[]; deptStatus: { department: string; status: string; applicable: boolean }[];
+  myDeptCode: string | null;
   initialBomItems: any[]; role: string; department: string | null;
 }) {
   const router = useRouter();
@@ -86,6 +87,40 @@ export default function WODetailClient({
   const [priority, setPriority] = useState<string>(wo.priority ?? "متوسطة");
   const [planMonth, setPlanMonth] = useState<string>(wo.plan_month ?? "");
   const [desc, setDesc] = useState<string>(wo.description ?? "");
+
+  // ── حالة الأقسام + الحالة العامة (من الداتابيز) ──
+  const canSetStatus = role === "admin" || role === "manager";
+  const [deptRows, setDeptRows] = useState(deptStatus);
+  const [statusConfirm, setStatusConfirm] = useState<{ next: string; incomplete: string[] } | null>(null);
+
+  const changeStatus = async (next: string, force: boolean) => {
+    setSaving(true);
+    const { data, error } = await supabase.rpc("set_work_order_status", {
+      p_wo_id: wo.id, p_status: next, p_force: force,
+    });
+    setSaving(false);
+    if (error) { flash(false, error.message); return; }
+    const res = data as { changed: boolean; needs_confirm: boolean; incomplete: string[] };
+    if (res.needs_confirm) { setStatusConfirm({ next, incomplete: res.incomplete }); return; }
+    setStatus(next);
+    setStatusConfirm(null);
+    flash(true, "تم تغيير حالة الأمر");
+    router.refresh();
+  };
+
+  const changeDeptStatus = async (dept: string, next: string) => {
+    const { error } = await supabase.rpc("set_department_status", { p_wo_id: wo.id, p_dept: dept, p_status: next });
+    if (error) { flash(false, error.message); return; }
+    setDeptRows(prev => prev.map(d => d.department === dept ? { ...d, status: next } : d));
+    flash(true, `تم تحديث حالة ${deptLabel(dept)}`);
+  };
+
+  const toggleApplicable = async (dept: string, value: boolean) => {
+    const { error } = await supabase.from("wo_department_status")
+      .update({ applicable: value }).eq("wo_id", wo.id).eq("department", dept);
+    if (error) { flash(false, error.message); return; }
+    setDeptRows(prev => prev.map(d => d.department === dept ? { ...d, applicable: value } : d));
+  };
   const [checks, setChecks] = useState({
     chk_client: !!wo.chk_client, chk_quality: !!wo.chk_quality, chk_assembly: !!wo.chk_assembly,
   });
@@ -104,10 +139,9 @@ export default function WODetailClient({
   const saveInfo = async () => {
     setSaving(true);
     const patch: any = {
-      status, expected_delivery: delivery || null, priority, plan_month: planMonth || null,
+      expected_delivery: delivery || null, priority, plan_month: planMonth || null,
       description: desc.trim() || null, ...checks,
     };
-    if (status === "مكتمل" && !wo.completion_date) patch.completion_date = todayStr;
     const { error } = await supabase.from("work_orders").update(patch).eq("id", wo.id);
     setSaving(false);
     if (error) { flash(false, error.message); return; }
@@ -378,10 +412,14 @@ export default function WODetailClient({
         {/* ═══ بيانات الأمر ═══ */}
         <div className="eg-card !p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Field label="الحالة">
-              <select value={status} onChange={e => setInfo<string>(setStatus)(e.target.value)} className="eg-select !py-1.5 !text-xs">
-                {STATUSES.map(s => <option key={s}>{s}</option>)}
-              </select>
+            <Field label="الحالة العامة">
+              {canSetStatus ? (
+                <select value={status} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
+                  {STATUSES.map(s => <option key={s}>{s}</option>)}
+                </select>
+              ) : (
+                <p className="text-xs text-text py-1.5">{status}</p>
+              )}
             </Field>
             <Field label="الأولوية">
               <select value={priority} onChange={e => setInfo<string>(setPriority)(e.target.value)} className="eg-select !py-1.5 !text-xs">
@@ -410,6 +448,44 @@ export default function WODetailClient({
               ))}
             </div>
           </div>
+        </div>
+
+        {/* ═══ حالة الأقسام ═══ */}
+        <div className="eg-card !p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
+            <span className="text-[11px] text-subtext tabular-nums">
+              {deptRows.filter(d => d.applicable && d.status === "مكتمل").length} / {deptRows.filter(d => d.applicable).length} مكتمل
+            </span>
+          </div>
+          <div className="divide-y divide-border/40">
+            {deptRows.map(d => {
+              const mine = canSetStatus || myDeptCode === d.department;
+              return (
+                <div key={d.department} className={cn("flex items-center justify-between gap-3 py-2", !d.applicable && "opacity-50")}>
+                  <div className="min-w-0">
+                    <p className="text-xs text-text">{deptLabel(d.department)}</p>
+                    {!d.applicable && <p className="text-[10px] text-subtext">غير مطلوب في هذا الأمر</p>}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {canSetStatus && (
+                      <label className="flex items-center gap-1 text-[10px] text-subtext cursor-pointer">
+                        <input type="checkbox" checked={d.applicable} onChange={e => toggleApplicable(d.department, e.target.checked)}
+                          className="accent-emerald-500" />
+                        مطلوب
+                      </label>
+                    )}
+                    <select value={d.status} disabled={!mine || !d.applicable}
+                      onChange={e => changeDeptStatus(d.department, e.target.value)}
+                      className="eg-select !py-1 !text-xs w-32 disabled:opacity-50">
+                      {["لم يبدأ", "جاري", "متوقف", "مكتمل"].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {!canSetStatus && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
         </div>
 
         {/* ═══ وصف الأمر ═══ */}
@@ -757,6 +833,28 @@ export default function WODetailClient({
       </Modal>
 
       {/* ═══ مودال صرف BOM ═══ */}
+      {/* ═══ تنبيه: الحالة مكتملة والأقسام مش كلها مكتملة ═══ */}
+      <Modal open={!!statusConfirm} onClose={() => setStatusConfirm(null)} title="أقسام لسه مش مكتملة" size="sm">
+        {statusConfirm && (
+          <div className="space-y-4">
+            <p className="text-xs text-subtext">
+              لو حددت الأمر "مكتمل" دلوقتي، الأقسام دي لسه ماخلصتش:
+            </p>
+            <ul className="space-y-1">
+              {statusConfirm.incomplete.map(d => (
+                <li key={d} className="text-sm text-warning">• {deptLabel(d)}</li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <button onClick={() => setStatusConfirm(null)} className="eg-btn-ghost flex-1 justify-center">تراجع</button>
+              <button onClick={() => changeStatus(statusConfirm.next, true)} className="eg-btn-success flex-1 justify-center">
+                تأكيد على أي حال
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!dispenseItem} onClose={() => setDispenseItem(null)} title="صرف كمية" size="sm">
         {dispenseItem && (
           <div className="space-y-3">

@@ -20,6 +20,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: purchases },
     { data: prodItems },
     { data: bomItems },
+    { data: deptRows },
+    { data: departmentRows },
   ] = await Promise.all([
     supabase.from("work_orders").select("*").eq("id", woId).single(),
     supabase.from("daily_productivity")
@@ -35,7 +37,14 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("wo_production_items").select("*").eq("work_order_id", woId).order("id", { ascending: true }),
     // RLS بتفلتر تلقائي: كل قسم يشوف بنوده هو بس، والمدير يشوف الكل
     supabase.from("wo_bom_items").select("*").eq("work_order_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
+    supabase.from("wo_department_status").select("department, status, applicable").eq("wo_id", woId),
+    supabase.from("departments").select("code, aliases").eq("active", true),
   ]);
+
+  // تحويل قسم المستخدم (بالقيمة القديمة) للـ code الثابت
+  const myDeptCode = (departmentRows ?? []).find((d: any) =>
+    (d.aliases ?? []).some((a: string) => a.trim().toLowerCase() === (department ?? "").trim().toLowerCase())
+  )?.code ?? null;
 
   if (!wo) notFound();
 
@@ -48,6 +57,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         purchases={purchases ?? []}
         initialProdItems={prodItems ?? []}
         initialBomItems={bomItems ?? []}
+        deptStatus={(deptRows ?? []) as any[]}
+        myDeptCode={myDeptCode}
         role={role}
         department={department}
       />
