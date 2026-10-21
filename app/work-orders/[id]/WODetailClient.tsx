@@ -13,6 +13,7 @@ import { downloadDispenseNote } from "@/lib/dispense-note";
 import { quantityToArabicWords } from "@/lib/arabic-words";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"];
+const PENDING = "في انتظار الاعتماد";
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"];
 const DONE = ["مكتمل", "تم التسليم"];
 const PRIORITY_STYLE: Record<string, string> = {
@@ -72,11 +73,14 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, currentUserName, departmentAliases, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, initialItems, initialTotalBom, isDesign, currentUserName, departmentAliases, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
   initialProdItems: any[]; deptStatus: { department: string; status: string }[];
   myDeptCode: string | null;
+  initialItems: any[];
+  initialTotalBom: any[];
+  isDesign: boolean;
   currentUserName: string;
   departmentAliases: { code: string; aliases: string[] }[];
   initialBomItems: any[]; role: string; department: string | null;
@@ -163,6 +167,84 @@ export default function WODetailClient({
   const setInfo = <T,>(fn: (v: T) => void) => (v: T) => { fn(v); setDirtyInfo(true); };
 
   /* ─────────── قائمة إنتاج الأمر ─────────── */
+  // ── مكتب التصميم: البنود والـ Total BOM والاعتماد ──
+  const [items, setItems] = useState<any[]>(initialItems);
+  const [totalBom, setTotalBom] = useState<any[]>(initialTotalBom);
+  const [activeItemId, setActiveItemId] = useState<number | null>(initialItems[0]?.id ?? null);
+  const [sentAt, setSentAt] = useState<string | null>(wo.design_sent_at ?? null);
+  const [approvedAt, setApprovedAt] = useState<string | null>(wo.design_approved_at ?? null);
+  const designPreSend = isManager || (isDesign && !sentAt);
+  const canAddChildren = isManager || (isDesign && !!approvedAt);
+  const [newItem, setNewItem] = useState({ description: "", qty: "1", part_no: "" });
+  const [newTb, setNewTb] = useState({ description: "", qty: "1", unit: "", part_no: "", remark: "" });
+  const [busyDesign, setBusyDesign] = useState(false);
+
+  const sendForApproval = async () => {
+    setBusyDesign(true);
+    const { error } = await supabase.rpc("design_send_for_approval", { p_wo_id: wo.id });
+    setBusyDesign(false);
+    if (error) { flash(false, error.message); return; }
+    setStatus(PENDING);
+    setSentAt(new Date().toISOString());
+    flash(true, "تم الإرسال للاعتماد");
+  };
+
+  const approveDesign = async () => {
+    setBusyDesign(true);
+    const { error } = await supabase.rpc("design_approve", { p_wo_id: wo.id });
+    setBusyDesign(false);
+    if (error) { flash(false, error.message); return; }
+    setStatus("لم يبدأ");
+    setApprovedAt(new Date().toISOString());
+    flash(true, "تم تسجيل الاعتماد");
+  };
+
+  const addItem = async () => {
+    if (!newItem.description.trim()) return;
+    const nextNo = items.reduce((m, it) => Math.max(m, it.item_no ?? 0), 0) + 1;
+    setBusyDesign(true);
+    const { data, error } = await supabase.from("work_order_items").insert({
+      wo_id: wo.id, item_no: nextNo, description: newItem.description.trim(),
+      qty: parseFloat(newItem.qty) || 1, part_no: newItem.part_no.trim() || null,
+    }).select("*").single();
+    setBusyDesign(false);
+    if (error) { flash(false, error.message); return; }
+    setItems(prev => [...prev, data]);
+    setActiveItemId(prev => prev ?? data.id);
+    setNewItem({ description: "", qty: "1", part_no: "" });
+  };
+
+  const removeItem = async (id: number) => {
+    if (!confirm("حذف البند؟ هيتحذف معاه BOM وقائمة الإنتاج الخاصين بيه")) return;
+    const { error } = await supabase.from("work_order_items").delete().eq("id", id);
+    if (error) { flash(false, error.message); return; }
+    setItems(prev => {
+      const next = prev.filter(it => it.id !== id);
+      if (activeItemId === id) setActiveItemId(next[0]?.id ?? null);
+      return next;
+    });
+  };
+
+  const addTb = async () => {
+    if (!newTb.description.trim()) return;
+    setBusyDesign(true);
+    const { data, error } = await supabase.from("wo_total_bom").insert({
+      wo_id: wo.id, description: newTb.description.trim(), qty: parseFloat(newTb.qty) || 1,
+      unit: newTb.unit.trim() || null, part_no: newTb.part_no.trim() || null, remark: newTb.remark.trim() || null,
+    }).select("*").single();
+    setBusyDesign(false);
+    if (error) { flash(false, error.message); return; }
+    setTotalBom(prev => [...prev, data]);
+    setNewTb({ description: "", qty: "1", unit: "", part_no: "", remark: "" });
+  };
+
+  const removeTb = async (id: number) => {
+    if (!confirm("حذف هذا البند من Total BOM؟")) return;
+    const { error } = await supabase.from("wo_total_bom").delete().eq("id", id);
+    if (error) { flash(false, error.message); return; }
+    setTotalBom(prev => prev.filter(x => x.id !== id));
+  };
+
   const [prodItems, setProdItems] = useState<any[]>(initialProdItems);
   const [draftRows, setDraftRows] = useState<ProdDraft[]>([emptyProdDraft()]);
   const [savingProdList, setSavingProdList] = useState(false);
@@ -221,6 +303,7 @@ export default function WODetailClient({
   const saveProdList = async () => {
     const rows = draftRows.filter(r => r.description.trim()).map(r => ({
       work_order_id: wo.id,
+      work_order_item_id: activeItemId,
       qty: parseFloat(r.qty) || 1,
       description: r.description.trim(),
       part_no: r.part_no.trim() || null,
@@ -274,6 +357,9 @@ export default function WODetailClient({
   const [bomItems, setBomItems] = useState<any[]>(initialBomItems);
   // غير المدير يشوف بنود قسمه بس
   const visibleBom = isManager ? bomItems : bomItems.filter(it => canDispense(it));
+  // BOM وقائمة الإنتاج بيتعرضوا للبند الحالي بس
+  const scopedBom = activeItemId == null ? visibleBom : visibleBom.filter(it => it.work_order_item_id === activeItemId);
+  const scopedProd = activeItemId == null ? prodItems : prodItems.filter(it => it.work_order_item_id === activeItemId);
   const [bomDraftRows, setBomDraftRows] = useState<BomDraft[]>([emptyBomDraft()]);
   const [savingBomList, setSavingBomList] = useState(false);
   const [editBomItem, setEditBomItem] = useState<any>(null);
@@ -315,6 +401,7 @@ export default function WODetailClient({
   const saveBomList = async () => {
     const rows = bomDraftRows.filter(r => r.description.trim()).map(r => ({
       work_order_id: wo.id,
+      work_order_item_id: activeItemId,
       s_no: r.s_no.trim() ? parseInt(r.s_no) : null,
       qty: parseFloat(r.qty) || 1,
       unit: r.unit.trim() || null,
@@ -474,8 +561,8 @@ export default function WODetailClient({
           <div className="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
             <Field label="الحالة العامة">
               {canSetStatus ? (
-                <select value={status} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
-                  {STATUSES.map(s => <option key={s}>{s}</option>)}
+                <select value={status} disabled={status === PENDING} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
+                  {[...STATUSES, ...(status === PENDING ? [PENDING] : [])].map(s => <option key={s} value={s} disabled={s === PENDING}>{s}</option>)}
                 </select>
               ) : (
                 <p className="text-xs text-text py-1.5">{status}</p>
@@ -556,6 +643,157 @@ export default function WODetailClient({
         </div>
         </fieldset>
 
+        {/* ═══ مكتب التصميم والاعتماد ═══ */}
+        <div className="eg-card !p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="text-sm font-bold text-text">مكتب التصميم والاعتماد</h2>
+            <span className="text-[11px] text-subtext">
+              {sentAt ? `أُرسل: ${new Date(sentAt).toLocaleString("ar-EG")}` : "لم يُرسل للاعتماد بعد"}
+              {approvedAt ? ` · اتعتمد: ${new Date(approvedAt).toLocaleString("ar-EG")}` : ""}
+            </span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {isDesign && !sentAt && (
+              <button onClick={sendForApproval} disabled={busyDesign || items.length === 0} className="eg-btn-primary !py-1.5 !text-xs disabled:opacity-40">
+                ارسال للاعتماد
+              </button>
+            )}
+            {isDesign && status === PENDING && !approvedAt && (
+              <button onClick={approveDesign} disabled={busyDesign} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
+                تسجيل الاعتماد
+              </button>
+            )}
+          </div>
+          {isDesign && !sentAt && items.length === 0 && (
+            <p className="text-[10px] text-warning">لازم تضيف بند واحد على الأقل قبل الإرسال للاعتماد</p>
+          )}
+        </div>
+
+        {/* ═══ البنود ═══ */}
+        <div className="eg-card !p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="text-sm font-bold text-text">بنود الأمر</h2>
+            {items.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-subtext">البند الحالي للـ BOM والإنتاج:</span>
+                <select value={activeItemId ?? ""} onChange={e => setActiveItemId(Number(e.target.value))} className="eg-select !py-1 !text-xs w-56">
+                  {items.map(it => <option key={it.id} value={it.id}>{it.item_no}. {it.description}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+          {items.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse min-w-[480px]">
+                <thead><tr className="bg-card2 text-subtext">
+                  <th className="px-3 py-1.5 text-center font-semibold w-12">#</th>
+                  <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
+                  <th className="px-3 py-1.5 text-right font-semibold w-32">رقم الصنف</th>
+                  <th className="w-10" />
+                </tr></thead>
+                <tbody>
+                  {items.map(it => (
+                    <tr key={it.id} onClick={() => setActiveItemId(it.id)}
+                      className={cn("border-t border-border/40 cursor-pointer hover:bg-card2/50", activeItemId === it.id && "bg-accent/5")}>
+                      <td className="px-3 py-1.5 text-center tabular-nums">{it.item_no}</td>
+                      <td className="px-3 py-1.5 text-text">{it.description}</td>
+                      <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
+                      <td className="px-3 py-1.5 font-mono text-subtext">{it.part_no ?? "—"}</td>
+                      <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
+                        {designPreSend && (
+                          <button onClick={() => removeItem(it.id)} className="text-subtext hover:text-danger" title="حذف البند">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="text-xs text-subtext">مفيش بنود بعد</p>}
+          {designPreSend && (
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+              <div className="md:col-span-5"><Field label="وصف البند">
+                <input value={newItem.description} onChange={e => setNewItem(f => ({ ...f, description: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-2"><Field label="الكمية">
+                <input type="number" min="0.01" step="any" value={newItem.qty} onChange={e => setNewItem(f => ({ ...f, qty: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-3"><Field label="رقم الصنف">
+                <input value={newItem.part_no} onChange={e => setNewItem(f => ({ ...f, part_no: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-2">
+                <button onClick={addItem} disabled={busyDesign || !newItem.description.trim()} className="eg-btn-primary !py-1.5 !text-xs w-full justify-center">
+                  <Plus className="w-3.5 h-3.5" />إضافة بند
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ═══ Total BOM ═══ */}
+        <div className="eg-card !p-4 space-y-3">
+          <h2 className="text-sm font-bold text-text">Total BOM (الأمر كله)</h2>
+          {totalBom.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse min-w-[560px]">
+                <thead><tr className="bg-card2 text-subtext">
+                  <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-20">الوحدة</th>
+                  <th className="px-3 py-1.5 text-right font-semibold w-32">رقم الصنف</th>
+                  <th className="px-3 py-1.5 text-right font-semibold">ملاحظة</th>
+                  <th className="w-10" />
+                </tr></thead>
+                <tbody>
+                  {totalBom.map(t => (
+                    <tr key={t.id} className="border-t border-border/40">
+                      <td className="px-3 py-1.5 text-text">{t.description}</td>
+                      <td className="px-3 py-1.5 text-center tabular-nums">{t.qty}</td>
+                      <td className="px-3 py-1.5 text-center">{t.unit ?? "—"}</td>
+                      <td className="px-3 py-1.5 font-mono text-subtext">{t.part_no ?? "—"}</td>
+                      <td className="px-3 py-1.5 text-subtext">{t.remark ?? "—"}</td>
+                      <td className="px-2 py-1.5">
+                        {designPreSend && (
+                          <button onClick={() => removeTb(t.id)} className="text-subtext hover:text-danger" title="حذف">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="text-xs text-subtext">مفيش Total BOM بعد</p>}
+          {designPreSend && (
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+              <div className="md:col-span-4"><Field label="الوصف">
+                <input value={newTb.description} onChange={e => setNewTb(f => ({ ...f, description: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-2"><Field label="الكمية">
+                <input type="number" min="0.01" step="any" value={newTb.qty} onChange={e => setNewTb(f => ({ ...f, qty: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-1"><Field label="الوحدة">
+                <input value={newTb.unit} onChange={e => setNewTb(f => ({ ...f, unit: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-2"><Field label="رقم الصنف">
+                <input value={newTb.part_no} onChange={e => setNewTb(f => ({ ...f, part_no: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-2"><Field label="ملاحظة">
+                <input value={newTb.remark} onChange={e => setNewTb(f => ({ ...f, remark: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
+              </Field></div>
+              <div className="md:col-span-1">
+                <button onClick={addTb} disabled={busyDesign || !newTb.description.trim()} className="eg-btn-primary !py-1.5 !text-xs w-full justify-center">
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* ═══ التبويبات ═══ */}
         <div className="flex gap-1 overflow-x-auto">
           {TABS.map(({ key, label, count }) => (
@@ -618,7 +856,7 @@ export default function WODetailClient({
         {/* ═══ قائمة الإنتاج ═══ */}
         {tab === "prodlist" && (
           <div className="space-y-3">
-            {prodItems.length > 0 && (
+            {scopedProd.length > 0 && (
               <div className="eg-card !p-0 overflow-x-auto">
                 <table className="w-full text-xs border-collapse min-w-[900px]">
                   <thead><tr className="bg-card2 text-subtext">
@@ -631,7 +869,7 @@ export default function WODetailClient({
                     {canManageLists && <th className="w-16" />}
                   </tr></thead>
                   <tbody>
-                    {prodItems.map((it: any) => {
+                    {scopedProd.map((it: any) => {
                       const needsPaint = it.required_painting !== "NA";
                       return (
                         <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
@@ -689,9 +927,9 @@ export default function WODetailClient({
                 </table>
               </div>
             )}
-            {prodItems.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود إنتاج بعد" /></div>}
+            {scopedProd.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود إنتاج بعد" /></div>}
 
-            {canManageLists && (
+            {canAddChildren && (
               <div className="eg-card !p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-semibold text-text">إضافة بنود</p>
@@ -752,7 +990,7 @@ export default function WODetailClient({
                 </div>
               </div>
             )}
-            {visibleBom.length > 0 && (
+            {scopedBom.length > 0 && (
               <div className="eg-card !p-0 overflow-x-auto">
                 <table className="w-full text-xs border-collapse min-w-[860px]">
                   <thead><tr className="bg-card2 text-subtext">
@@ -769,7 +1007,7 @@ export default function WODetailClient({
                     <th className="px-3 py-2 text-center font-semibold w-36">إجراءات</th>
                   </tr></thead>
                   <tbody>
-                    {visibleBom.map((it: any) => {
+                    {scopedBom.map((it: any) => {
                       const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
                       return (
                         <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
@@ -811,9 +1049,9 @@ export default function WODetailClient({
                 </table>
               </div>
             )}
-            {visibleBom.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" /></div>}
+            {scopedBom.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" /></div>}
 
-            {canManageLists && (
+            {canAddChildren && (
               <div className="eg-card !p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-semibold text-text">إضافة بنود BOM</p>

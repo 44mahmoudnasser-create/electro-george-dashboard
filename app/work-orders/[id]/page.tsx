@@ -22,6 +22,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     { data: bomItems },
     { data: deptRows },
     { data: departmentRows },
+    { data: itemRows },
+    { data: totalBomRows },
   ] = await Promise.all([
     supabase.from("work_orders").select("*").eq("id", woId).single(),
     supabase.from("daily_productivity")
@@ -39,6 +41,8 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("wo_bom_items").select("*").eq("work_order_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
     supabase.from("wo_department_status").select("department, status").eq("wo_id", woId),
     supabase.from("departments").select("code, aliases").eq("active", true),
+    supabase.from("work_order_items").select("*").eq("wo_id", woId).order("item_no", { ascending: true }),
+    supabase.from("wo_total_bom").select("*").eq("wo_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
   ]);
 
   // تحويل قسم المستخدم (بالقيمة القديمة) للـ code الثابت
@@ -63,6 +67,9 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         deptStatus={(deptRows ?? []) as any[]}
         myDeptCode={myDeptCode}
         currentUserName={currentUserName}
+        initialItems={(itemRows ?? []) as any[]}
+        initialTotalBom={(totalBomRows ?? []) as any[]}
+        isDesign={myDeptCode === "DESIGN"}
         departmentAliases={(departmentRows ?? []) as any[]}
         role={role}
         department={department}
