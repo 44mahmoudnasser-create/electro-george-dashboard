@@ -8,7 +8,8 @@ import { Save, RefreshCw, ChevronDown, ChevronUp, Printer, CalendarCheck } from 
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 import { cn } from "@/lib/utils";
 
-const ATT_OPTS = ["حاضر", "غياب", "أجازة", "مأمورية"];
+const NOT_RECORDED = "—";
+const ATT_OPTS = [NOT_RECORDED, "حاضر", "غياب", "أجازة", "مأمورية"];
 const PERM_OPTS = ["—", "إذن ساعتين صباحي", "إذن ساعتين مسائي", "إذن نصف يوم صباحي", "إذن نصف يوم مسائي"];
 
 type AttRow = { tech_id: number; status: string; permission: string; overtime: boolean };
@@ -73,7 +74,7 @@ export default function AttendanceClient({
     const otMap = Object.fromEntries((ot.data ?? []).map(r => [r.tech_id, r.has_overtime]));
     const next = visibleTechnicians.map(t => ({
       tech_id: t.id,
-      status: attMap[t.id] ?? "حاضر",
+      status: attMap[t.id] ?? NOT_RECORDED,
       permission: permMap[t.id] ?? "—",
       overtime: otMap[t.id] ?? false,
     }));
@@ -117,7 +118,12 @@ export default function AttendanceClient({
 
     setSaving(true);
     try {
-      const attRows = changed.map(r => ({ tech_id: r.tech_id, date, status: r.status }));
+      const attRows = changed
+        .filter(r => r.status !== NOT_RECORDED)
+        .map(r => ({ tech_id: r.tech_id, date, status: r.status }));
+      const attDeleteIds = changed
+        .filter(r => r.status === NOT_RECORDED && saved.get(r.tech_id)?.status !== NOT_RECORDED)
+        .map(r => r.tech_id);
       const otRows = changed.map(r => ({ tech_id: r.tech_id, date, has_overtime: r.overtime }));
       const permUpserts = changed
         .filter(r => r.permission !== "—")
@@ -128,9 +134,14 @@ export default function AttendanceClient({
         .map(r => r.tech_id);
 
       const ops: PromiseLike<{ error: { message: string } | null }>[] = [
-        supabase.from("attendance").upsert(attRows, { onConflict: "tech_id,date" }),
         supabase.from("overtime").upsert(otRows, { onConflict: "tech_id,date" }),
       ];
+      if (attRows.length) {
+        ops.push(supabase.from("attendance").upsert(attRows, { onConflict: "tech_id,date" }));
+      }
+      if (attDeleteIds.length) {
+        ops.push(supabase.from("attendance").delete().in("tech_id", attDeleteIds).eq("date", date));
+      }
       if (permUpserts.length) {
         ops.push(supabase.from("permissions").upsert(permUpserts, { onConflict: "tech_id,date" }));
       }
@@ -154,7 +165,9 @@ export default function AttendanceClient({
         const next = [...prev];
         changed.forEach(r => {
           const idx = next.findIndex(y => y.tech_id === r.tech_id && y.date === date);
-          if (idx >= 0) next[idx] = { ...next[idx], status: r.status };
+          if (r.status === NOT_RECORDED) {
+            if (idx >= 0) next.splice(idx, 1);
+          } else if (idx >= 0) next[idx] = { ...next[idx], status: r.status };
           else next.push({ tech_id: r.tech_id, date, status: r.status });
         });
         return next;
@@ -204,6 +217,7 @@ export default function AttendanceClient({
   const daySummary = useMemo(() => {
     const c = (fn: (r: AttRow) => boolean) => rows.filter(fn).length;
     return {
+      unrecorded: c(r => r.status === NOT_RECORDED),
       present: c(r => r.status === "حاضر"),
       absent: c(r => r.status === "غياب"),
       leave: c(r => r.status === "أجازة"),
@@ -326,6 +340,7 @@ export default function AttendanceClient({
           <>
             {/* ملخص اليوم */}
             <div className="flex items-center gap-2 flex-wrap text-xs">
+              <Stat label="لم يُسجل" value={daySummary.unrecorded} tone="muted" />
               <Stat label="حاضر" value={daySummary.present} tone="success" />
               <Stat label="غياب" value={daySummary.absent} tone="danger" />
               <Stat label="إجازة" value={daySummary.leave} tone="warning" />
@@ -363,7 +378,7 @@ export default function AttendanceClient({
                           <select value={r.status} onChange={e => setRow(r.tech_id, { status: e.target.value })}
                             className={cn("eg-select !py-1 !text-xs w-full",
                               isAbsent && "!border-danger/50 !text-danger")}>
-                            {ATT_OPTS.map(o => <option key={o}>{o}</option>)}
+                            {ATT_OPTS.map(o => <option key={o} value={o}>{o === NOT_RECORDED ? "لم يُسجل" : o}</option>)}
                           </select>
                         </td>
                         <td className="px-3 py-2">
