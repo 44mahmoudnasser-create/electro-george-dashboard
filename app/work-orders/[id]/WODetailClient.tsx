@@ -410,7 +410,8 @@ export default function WODetailClient({
         receiver: dnReceiver.trim(),
         lines: res.items.map((l: any) => ({
           name: l.description, partNo: l.part_no ?? "", unit: l.unit ?? "",
-          requested: Number(l.requested), dispensed: Number(l.dispensed),
+          // المطلوب في الإذن = الكمية اللي اتطلبت في الإذن ده (مش إجمالي البند)
+          requested: Number(l.dispensed), dispensed: Number(l.dispensed),
         })),
       });
     } catch (e) {
