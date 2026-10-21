@@ -59,6 +59,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         initialBomItems={bomItems ?? []}
         deptStatus={(deptRows ?? []) as any[]}
         myDeptCode={myDeptCode}
+        departmentAliases={(departmentRows ?? []) as any[]}
         role={role}
         department={department}
       />

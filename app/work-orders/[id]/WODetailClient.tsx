@@ -70,16 +70,28 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, departmentAliases, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
   initialProdItems: any[]; deptStatus: { department: string; status: string }[];
   myDeptCode: string | null;
+  departmentAliases: { code: string; aliases: string[] }[];
   initialBomItems: any[]; role: string; department: string | null;
 }) {
   const router = useRouter();
   const todayStr = today();
   const canManageLists = role === "manager";
+  const isManager = role === "manager";
+
+  // تحويل أي قيمة قسم قديمة للـ code (زي resolve_department في الداتابيز)
+  const resolveDeptCode = (raw: string | null | undefined) => {
+    const v = (raw ?? "").trim().toLowerCase();
+    if (!v) return null;
+    return departmentAliases.find(d => d.aliases.some(a => a.trim().toLowerCase() === v))?.code ?? null;
+  };
+  // الصرف: المدير أي بند، والباقي بنود قسمه بس
+  const canDispense = (it: any) =>
+    isManager || (myDeptCode !== null && resolveDeptCode(it.department) === myDeptCode);
 
   /* ─────────── بيانات الأمر (تعديل) ─────────── */
   const [status, setStatus] = useState<string>(wo.status);
@@ -257,6 +269,8 @@ export default function WODetailClient({
 
   /* ─────────── BOM ─────────── */
   const [bomItems, setBomItems] = useState<any[]>(initialBomItems);
+  // غير المدير يشوف بنود قسمه بس
+  const visibleBom = isManager ? bomItems : bomItems.filter(it => canDispense(it));
   const [bomDraftRows, setBomDraftRows] = useState<BomDraft[]>([emptyBomDraft()]);
   const [savingBomList, setSavingBomList] = useState(false);
   const [editBomItem, setEditBomItem] = useState<any>(null);
@@ -384,7 +398,7 @@ export default function WODetailClient({
           </div>
           <div className="flex-1" />
           {dirtyInfo && <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning">تعديلات غير محفوظة</span>}
-          <button onClick={saveInfo} disabled={saving || !dirtyInfo} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
+          <button onClick={saveInfo} disabled={saving || !dirtyInfo || !isManager} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
             <Save className="w-3.5 h-3.5" />{saving ? "جاري الحفظ..." : "حفظ البيانات"}
           </button>
         </div>
@@ -404,6 +418,7 @@ export default function WODetailClient({
           </div>
         )}
 
+        <fieldset disabled={!isManager} className="contents">
         {/* ═══ بيانات الأمر ═══ */}
         <div className="eg-card !p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -444,6 +459,7 @@ export default function WODetailClient({
             </div>
           </div>
         </div>
+        </fieldset>
 
         {/* ═══ حالة الأقسام ═══ */}
         <div className="eg-card !p-4">
@@ -479,6 +495,7 @@ export default function WODetailClient({
           {role !== "manager" && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
         </div>
 
+        <fieldset disabled={!isManager} className="contents">
         {/* ═══ وصف الأمر ═══ */}
         <div className="eg-card !p-4">
           <Field label="وصف الأمر">
@@ -487,6 +504,7 @@ export default function WODetailClient({
               className="eg-input !h-auto py-2 !text-xs" placeholder="المنتج، المطلوب، ملاحظات التنفيذ..." />
           </Field>
         </div>
+        </fieldset>
 
         {/* ═══ التبويبات ═══ */}
         <div className="flex gap-1 overflow-x-auto">
@@ -591,7 +609,7 @@ export default function WODetailClient({
                                   <span className={cn("tabular-nums", remaining <= 0 ? "text-success font-semibold" : "text-text")}>
                                     {fmt(produced)}/{fmt(it.qty)}
                                   </span>
-                                  <button onClick={() => openLogStage(it, s.key)} disabled={!canLog}
+                                  <button onClick={() => openLogStage(it, s.key)} disabled={!canLog || !isManager} title={isManager ? undefined : "للمدير بس"}
                                     className="text-accent disabled:text-subtext disabled:cursor-not-allowed hover:underline">
                                     تسجيل
                                   </button>
@@ -673,7 +691,7 @@ export default function WODetailClient({
                 : <span className="text-warning">اختار القسم اللي البنود دي بتاعته قبل الحفظ.</span>}
             </p>
 
-            {bomItems.length > 0 && (
+            {visibleBom.length > 0 && (
               <div className="eg-card !p-0 overflow-x-auto">
                 <table className="w-full text-xs border-collapse min-w-[860px]">
                   <thead><tr className="bg-card2 text-subtext">
@@ -689,7 +707,7 @@ export default function WODetailClient({
                     <th className="px-3 py-2 text-center font-semibold w-36">إجراءات</th>
                   </tr></thead>
                   <tbody>
-                    {bomItems.map((it: any) => {
+                    {visibleBom.map((it: any) => {
                       const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
                       return (
                         <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
@@ -704,7 +722,7 @@ export default function WODetailClient({
                           <td className={cn("px-3 py-1.5 text-center tabular-nums font-semibold", remaining <= 0 ? "text-success" : "text-warning")}>{remaining}</td>
                           <td className="px-3 py-1.5">
                             <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => { setDispenseItem(it); setDispenseQty(""); }} disabled={remaining <= 0}
+                              <button onClick={() => { setDispenseItem(it); setDispenseQty(""); }} disabled={remaining <= 0 || !canDispense(it)}
                                 className="text-success disabled:text-subtext disabled:cursor-not-allowed hover:underline">صرف</button>
                               {canManageLists && (
                                 <>
@@ -725,7 +743,7 @@ export default function WODetailClient({
                 </table>
               </div>
             )}
-            {bomItems.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" /></div>}
+            {visibleBom.length === 0 && <div className="eg-card"><EmptyState message="لا توجد بنود BOM لقسمك على هذا الأمر" /></div>}
 
             {canManageLists && (
               <div className="eg-card !p-4 space-y-3">
