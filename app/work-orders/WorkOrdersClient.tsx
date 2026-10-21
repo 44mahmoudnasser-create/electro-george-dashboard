@@ -27,7 +27,7 @@ type SortCol = "wo_number" | "status" | "created_date" | "expected_delivery" | "
 
 const EMPTY_FORM = { wo_number: "", description: "", status: "لم يبدأ", expected_delivery: "", priority: "متوسطة", plan_month: "" };
 
-export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[]; role: string }) {
+export default function WorkOrdersClient({ initialWOs, role, canCreate }: { initialWOs: WO[]; role: string; canCreate: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const todayStr = today();
@@ -133,7 +133,7 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
                 hideDone ? "bg-accent/15 border-accent/60 text-accent" : "bg-card2 border-border text-subtext hover:text-text")}>
               إخفاء المنتهي
             </button>
-            {role === "manager" && (
+            {canCreate && (
               <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
                 <Plus className="w-3.5 h-3.5" />أمر شغل جديد
               </button>
