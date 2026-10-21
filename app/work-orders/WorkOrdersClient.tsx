@@ -133,9 +133,11 @@ export default function WorkOrdersClient({ initialWOs, role }: { initialWOs: WO[
                 hideDone ? "bg-accent/15 border-accent/60 text-accent" : "bg-card2 border-border text-subtext hover:text-text")}>
               إخفاء المنتهي
             </button>
-            <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
-              <Plus className="w-3.5 h-3.5" />أمر شغل جديد
-            </button>
+            {role === "manager" && (
+              <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
+                <Plus className="w-3.5 h-3.5" />أمر شغل جديد
+              </button>
+            )}
           </div>
         </div>
 
