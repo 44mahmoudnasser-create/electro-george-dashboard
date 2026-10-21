@@ -42,6 +42,9 @@ export default async function WODetailPage({ params }: { params: { id: string } 
   ]);
 
   // تحويل قسم المستخدم (بالقيمة القديمة) للـ code الثابت
+  const { data: me } = await supabase.from("app_users").select("full_name, email").eq("id", user.id).maybeSingle();
+  const currentUserName = me?.full_name || me?.email || "";
+
   const myDeptCode = (departmentRows ?? []).find((d: any) =>
     (d.aliases ?? []).some((a: string) => a.trim().toLowerCase() === (department ?? "").trim().toLowerCase())
   )?.code ?? null;
@@ -59,6 +62,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         initialBomItems={bomItems ?? []}
         deptStatus={(deptRows ?? []) as any[]}
         myDeptCode={myDeptCode}
+        currentUserName={currentUserName}
         departmentAliases={(departmentRows ?? []) as any[]}
         role={role}
         department={department}

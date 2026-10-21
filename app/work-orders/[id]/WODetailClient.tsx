@@ -6,9 +6,11 @@ import { supabase } from "@/lib/supabase";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { ChevronRight, Save, Plus, X, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, Save, Plus, X, Pencil, Trash2, Printer } from "lucide-react";
 import { today, cn } from "@/lib/utils";
 import { deptLabel } from "@/lib/roles";
+import { downloadDispenseNote } from "@/lib/dispense-note";
+import { quantityToArabicWords } from "@/lib/arabic-words";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"];
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"];
@@ -70,11 +72,12 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, departmentAliases, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, currentUserName, departmentAliases, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
   initialProdItems: any[]; deptStatus: { department: string; status: string }[];
   myDeptCode: string | null;
+  currentUserName: string;
   departmentAliases: { code: string; aliases: string[] }[];
   initialBomItems: any[]; role: string; department: string | null;
 }) {
@@ -275,12 +278,16 @@ export default function WODetailClient({
   const [savingBomList, setSavingBomList] = useState(false);
   const [editBomItem, setEditBomItem] = useState<any>(null);
   const [editBomForm, setEditBomForm] = useState<BomDraft>(emptyBomDraft());
-  const [dispenseItem, setDispenseItem] = useState<any>(null);
   // المدير مش مرتبط بقسم، فبيختار القسم اللي البنود دي بتاعته
   const [bomDept, setBomDept] = useState("");
   const bomDeptEffective = role === "manager" ? bomDept : (department ?? "");
-  const [dispenseQty, setDispenseQty] = useState("");
-  const [dispensing, setDispensing] = useState(false);
+  // ── إذن صرف مواد: أكتر من بند في عملية واحدة ──
+  const [dnSel, setDnSel] = useState<Record<number, string>>({});
+  const [dnOpen, setDnOpen] = useState(false);
+  const [dnProcess, setDnProcess] = useState("");
+  const [dnReceiver, setDnReceiver] = useState("");
+  const [dnEngineer, setDnEngineer] = useState(currentUserName);
+  const [dnBusy, setDnBusy] = useState(false);
 
   const handleBomPaste = (e: ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
     const text = e.clipboardData.getData("text");
@@ -357,19 +364,61 @@ export default function WODetailClient({
     setBomItems(prev => prev.filter(it => it.id !== itemId));
   };
 
-  const submitDispense = async () => {
-    if (!dispenseItem) return;
-    const q = parseFloat(dispenseQty);
-    if (!q || q <= 0) { flash(false, "أدخل كمية صحيحة"); return; }
-    setDispensing(true);
-    const { error } = await supabase.rpc("dispense_bom_item", {
-      p_bom_item_id: dispenseItem.id, p_qty: q, p_note: null,
+  const toggleDnSel = (it: any) => setDnSel(prev => {
+    const n = { ...prev };
+    if (n[it.id] !== undefined) delete n[it.id];
+    else n[it.id] = String((it.qty ?? 0) - (it.qty_dispensed ?? 0));
+    return n;
+  });
+
+  const openDispenseFor = (it: any) => {
+    setDnSel({ [it.id]: String((it.qty ?? 0) - (it.qty_dispensed ?? 0)) });
+    setDnOpen(true);
+  };
+
+  const dnSelectedRows = bomItems.filter(it => dnSel[it.id] !== undefined);
+
+  const submitDispenseNote = async () => {
+    const items = Object.entries(dnSel).map(([id, q]) => ({ bom_item_id: Number(id), qty: parseFloat(q) }));
+    if (items.length === 0) { flash(false, "اختار بند واحد على الأقل"); return; }
+    if (items.some(i => !i.qty || i.qty <= 0)) { flash(false, "أدخل كمية صحيحة لكل بند"); return; }
+
+    setDnBusy(true);
+    const { data, error } = await supabase.rpc("dispense_bom_batch", {
+      p_wo_id: wo.id,
+      p_items: items,
+      p_process: dnProcess.trim() || null,
+      p_receiver: dnReceiver.trim() || null,
+      p_engineer: dnEngineer.trim() || null,
     });
-    setDispensing(false);
+    setDnBusy(false);
     if (error) { flash(false, error.message); return; }
-    setBomItems(prev => prev.map(it =>
-      it.id === dispenseItem.id ? { ...it, qty_dispensed: (it.qty_dispensed ?? 0) + q } : it));
-    setDispenseItem(null);
+
+    const res = data as { id: number; note_no: string; items: any[] };
+    setBomItems(prev => prev.map(it => {
+      const line = items.find(i => i.bom_item_id === it.id);
+      return line ? { ...it, qty_dispensed: (it.qty_dispensed ?? 0) + line.qty } : it;
+    }));
+
+    try {
+      await downloadDispenseNote({
+        noteNo: res.note_no,
+        date: todayStr,
+        woNumber: wo.wo_number,
+        process: dnProcess.trim(),
+        engineer: dnEngineer.trim(),
+        receiver: dnReceiver.trim(),
+        lines: res.items.map((l: any) => ({
+          name: l.description, partNo: l.part_no ?? "", unit: l.unit ?? "",
+          requested: Number(l.requested), dispensed: Number(l.dispensed),
+        })),
+      });
+    } catch (e) {
+      flash(false, (e as Error).message);
+    }
+
+    setDnSel({}); setDnOpen(false); setDnProcess(""); setDnReceiver("");
+    flash(true, `تم الصرف — إذن ${res.note_no}`);
   };
 
   const getImageUrl = (path: string) => supabase.storage.from("purchases").getPublicUrl(path).data.publicUrl;
@@ -691,10 +740,22 @@ export default function WODetailClient({
                 : <span className="text-warning">اختار القسم اللي البنود دي بتاعته قبل الحفظ.</span>}
             </p>
 
+            {dnSelectedRows.length > 0 && (
+              <div className="eg-card !p-3 flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-xs text-text">متحدد {dnSelectedRows.length} بند</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setDnSel({})} className="eg-btn-ghost !py-1 !text-xs">إلغاء التحديد</button>
+                  <button onClick={() => setDnOpen(true)} className="eg-btn-success !py-1 !text-xs">
+                    <Printer className="w-3.5 h-3.5" />صرف وطباعة الإذن
+                  </button>
+                </div>
+              </div>
+            )}
             {visibleBom.length > 0 && (
               <div className="eg-card !p-0 overflow-x-auto">
                 <table className="w-full text-xs border-collapse min-w-[860px]">
                   <thead><tr className="bg-card2 text-subtext">
+                    <th className="px-2 py-2 w-10" />
                     <th className="px-3 py-2 text-center font-semibold w-14">S.NO</th>
                     <th className="px-3 py-2 text-center font-semibold w-16">Qty</th>
                     <th className="px-3 py-2 text-center font-semibold w-16">Unit</th>
@@ -711,6 +772,12 @@ export default function WODetailClient({
                       const remaining = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
                       return (
                         <tr key={it.id} className="border-t border-border/40 hover:bg-card2/50">
+                          <td className="px-2 py-1.5 text-center">
+                            {canDispense(it) && remaining > 0 && (
+                              <input type="checkbox" checked={dnSel[it.id] !== undefined} onChange={() => toggleDnSel(it)}
+                                className="accent-emerald-500 w-4 h-4 cursor-pointer" />
+                            )}
+                          </td>
                           <td className="px-3 py-1.5 text-center">{it.s_no ?? "—"}</td>
                           <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
                           <td className="px-3 py-1.5 text-center">{it.unit ?? "—"}</td>
@@ -722,7 +789,7 @@ export default function WODetailClient({
                           <td className={cn("px-3 py-1.5 text-center tabular-nums font-semibold", remaining <= 0 ? "text-success" : "text-warning")}>{remaining}</td>
                           <td className="px-3 py-1.5">
                             <div className="flex items-center justify-center gap-2">
-                              <button onClick={() => { setDispenseItem(it); setDispenseQty(""); }} disabled={remaining <= 0 || !canDispense(it)}
+                              <button onClick={() => openDispenseFor(it)} disabled={remaining <= 0 || !canDispense(it)}
                                 className="text-success disabled:text-subtext disabled:cursor-not-allowed hover:underline">صرف</button>
                               {canManageLists && (
                                 <>
@@ -864,24 +931,58 @@ export default function WODetailClient({
         )}
       </Modal>
 
-      <Modal open={!!dispenseItem} onClose={() => setDispenseItem(null)} title="صرف كمية" size="sm">
-        {dispenseItem && (
-          <div className="space-y-3">
-            <div className="bg-card2 rounded-lg p-3">
-              <p className="text-sm text-text font-medium">{dispenseItem.description}</p>
-              <p className="text-[11px] text-subtext mt-1 tabular-nums">
-                الإجمالي {dispenseItem.qty} · المنصرف {dispenseItem.qty_dispensed ?? 0} · المتبقي {(dispenseItem.qty ?? 0) - (dispenseItem.qty_dispensed ?? 0)}
-              </p>
-            </div>
-            <Field label="الكمية المراد صرفها">
-              <input type="number" min="0.01" step="any" value={dispenseQty} autoFocus
-                onChange={e => setDispenseQty(e.target.value)} className="eg-input" />
-            </Field>
-            <button onClick={submitDispense} disabled={dispensing} className="eg-btn-success w-full justify-center">
-              {dispensing ? "جاري الصرف..." : "تأكيد الصرف"}
-            </button>
+      <Modal open={dnOpen} onClose={() => setDnOpen(false)} title="إذن صرف مواد" size="md">
+        <div className="space-y-4">
+          <div className="border border-border/60 rounded-lg overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead><tr className="bg-card2 text-subtext">
+                <th className="px-3 py-1.5 text-right font-semibold">البند</th>
+                <th className="px-2 py-1.5 text-center font-semibold w-20">المتبقي</th>
+                <th className="px-2 py-1.5 text-center font-semibold w-28">المنصرف</th>
+                <th className="w-8" />
+              </tr></thead>
+              <tbody>
+                {dnSelectedRows.map(it => {
+                  const rem = (it.qty ?? 0) - (it.qty_dispensed ?? 0);
+                  return (
+                    <tr key={it.id} className="border-t border-border/40">
+                      <td className="px-3 py-1.5 text-text">{it.description}</td>
+                      <td className="px-2 py-1.5 text-center tabular-nums">{rem} {it.unit ?? ""}</td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" min="0.01" step="any" max={rem} value={dnSel[it.id]}
+                          onChange={e => setDnSel(prev => ({ ...prev, [it.id]: e.target.value }))}
+                          className="eg-input !py-1 !px-2 !text-xs" />
+                        {parseFloat(dnSel[it.id]) > 0 && (
+                          <p className="text-[10px] text-subtext mt-0.5">{quantityToArabicWords(parseFloat(dnSel[it.id]), it.unit)}</p>
+                        )}
+                      </td>
+                      <td className="px-1 text-center">
+                        <button onClick={() => toggleDnSel(it)} className="text-subtext hover:text-danger" title="إزالة">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="اسم العملية">
+              <input value={dnProcess} onChange={e => setDnProcess(e.target.value)} className="eg-input" />
+            </Field>
+            <Field label="المستلم">
+              <input value={dnReceiver} onChange={e => setDnReceiver(e.target.value)} className="eg-input" />
+            </Field>
+          </div>
+          <Field label="المهندس المسؤول">
+            <input value={dnEngineer} onChange={e => setDnEngineer(e.target.value)} className="eg-input" />
+          </Field>
+          <button onClick={submitDispenseNote} disabled={dnBusy || dnSelectedRows.length === 0}
+            className="eg-btn-success w-full justify-center">
+            <Printer className="w-4 h-4" />{dnBusy ? "جاري الصرف..." : "تأكيد الصرف وتحميل الإذن"}
+          </button>
+        </div>
       </Modal>
 
       {/* ═══ مودال تسجيل إنتاج ═══ */}
