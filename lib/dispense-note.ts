@@ -1,7 +1,6 @@
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { downloadBlob } from "@/lib/overtime-form";
-import { quantityToArabicWords } from "@/lib/arabic-words";
 
 export type DispenseLine = {
   name: string;
@@ -33,12 +32,13 @@ export async function buildDispenseNote(input: DispenseNoteInput): Promise<Blob>
   if (!res.ok) throw new Error("مش لاقي قالب إذن الصرف");
   const buf = await res.arrayBuffer();
 
+  // المنصرف والمنصرف بالحروف بيتسيبوا فاضيين في الإذن المطبوع (بيتملوا بالإيد)
   const items = input.lines.map(l => ({
     name: l.name,
     part_no: l.partNo || "—",
     requested: `${l.requested} ${l.unit}`.trim(),
-    dispensed: `${l.dispensed} ${l.unit}`.trim(),
-    words: quantityToArabicWords(l.dispensed, l.unit),
+    dispensed: "",
+    words: "",
   }));
   while (items.length < MIN_ROWS) {
     items.push({ name: "", part_no: "", requested: "", dispensed: "", words: "" });
