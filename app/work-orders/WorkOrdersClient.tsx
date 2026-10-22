@@ -6,7 +6,7 @@ import { today, cn } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { Plus, Search, ArrowUpDown, ChevronLeft } from "lucide-react";
+import { Plus, Search, ArrowUpDown, ChevronLeft, X } from "lucide-react";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"] as const;
@@ -27,7 +27,7 @@ type SortCol = "wo_number" | "status" | "created_date" | "expected_delivery" | "
 
 const EMPTY_FORM = { wo_number: "", description: "", status: "لم يبدأ", expected_delivery: "", priority: "متوسطة", plan_month: "" };
 
-export default function WorkOrdersClient({ initialWOs, role, canCreate }: { initialWOs: WO[]; role: string; canCreate: boolean }) {
+export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign }: { initialWOs: WO[]; role: string; canCreate: boolean; isDesign: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const todayStr = today();
@@ -41,6 +41,9 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate }: { init
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  // مكتب التصميم: Total BOM بيتكتب مع الأمر مرة واحدة
+  const EMPTY_TB = { description: "", qty: "1", unit: "", part_no: "", remark: "" };
+  const [tbRows, setTbRows] = useState<typeof EMPTY_TB[]>([{ ...EMPTY_TB }]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -79,23 +82,53 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate }: { init
   const addWO = async () => {
     if (!form.wo_number.trim()) return;
     setSaving(true); setError("");
-    const { data, error: e } = await supabase.from("work_orders")
-      .insert({
-        wo_number: form.wo_number.trim(),
-        description: form.description.trim() || null,
-        status: form.status,
-        priority: form.priority,
-        expected_delivery: form.expected_delivery || null,
-        plan_month: form.plan_month || null,
-        created_date: todayStr,
-      })
-      .select().single();
-    setSaving(false);
-    if (e) { setError(e.message); return; }
-    setWOs(prev => [data, ...prev]);
+
+    let newId: number | null = null;
+    if (isDesign) {
+      // مكتب التصميم: الأمر + Total BOM في عملية واحدة
+      const bom = tbRows
+        .filter(r => r.description.trim())
+        .map(r => ({
+          description: r.description.trim(), qty: parseFloat(r.qty) || 1,
+          unit: r.unit.trim() || null, part_no: r.part_no.trim() || null, remark: r.remark.trim() || null,
+        }));
+      const { data, error: e } = await supabase.rpc("create_work_order_design", {
+        p_wo_number: form.wo_number.trim(),
+        p_description: form.description.trim(),
+        p_expected_delivery: form.expected_delivery || null,
+        p_plan_month: form.plan_month || null,
+        p_priority: form.priority,
+        p_total_bom: bom,
+      });
+      setSaving(false);
+      if (e) { setError(e.message); return; }
+      newId = (data as { id: number }).id;
+    } else {
+      const { data, error: e } = await supabase.from("work_orders")
+        .insert({
+          wo_number: form.wo_number.trim(),
+          description: form.description.trim() || null,
+          status: form.status,
+          priority: form.priority,
+          expected_delivery: form.expected_delivery || null,
+          plan_month: form.plan_month || null,
+          created_date: todayStr,
+        })
+        .select().single();
+      setSaving(false);
+      if (e) { setError(e.message); return; }
+      setWOs(prev => [data, ...prev]);
+      newId = data.id;
+    }
+
+    if (isDesign) {
+      const { data: fresh } = await supabase.from("work_orders").select("*").eq("id", newId).single();
+      if (fresh) setWOs(prev => [fresh, ...prev]);
+    }
     setAddOpen(false);
     setForm(EMPTY_FORM);
-    router.push(`${pathname}/${data.id}`);
+    setTbRows([{ ...EMPTY_TB }]);
+    router.push(`${pathname}/${newId}`);
   };
 
   const SortTh = ({ col, label, className }: { col: SortCol; label: string; className?: string }) => (
@@ -261,8 +294,30 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate }: { init
               onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
               className="eg-input !h-auto py-2" placeholder="وصف مختصر لأمر الشغل (المنتج، المطلوب، ملاحظات...)" />
           </div>
+          {isDesign && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="eg-label !mb-0">Total BOM (مرة واحدة، ومقفول بعد الحفظ)</label>
+                <button type="button" onClick={() => setTbRows(r => [...r, { ...EMPTY_TB }])} className="text-xs text-accent hover:underline">+ سطر</button>
+              </div>
+              {tbRows.map((r, i) => (
+                <div key={i} className="grid grid-cols-12 gap-1.5 items-center">
+                  <input value={r.description} placeholder="الوصف" onChange={e => setTbRows(rows => rows.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                    className="eg-input !py-1 !text-xs col-span-5" />
+                  <input value={r.qty} type="number" min="0.01" step="any" onChange={e => setTbRows(rows => rows.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
+                    className="eg-input !py-1 !text-xs col-span-2" />
+                  <input value={r.unit} placeholder="الوحدة" onChange={e => setTbRows(rows => rows.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
+                    className="eg-input !py-1 !text-xs col-span-2" />
+                  <input value={r.part_no} placeholder="رقم الصنف" onChange={e => setTbRows(rows => rows.map((x, j) => j === i ? { ...x, part_no: e.target.value } : x))}
+                    className="eg-input !py-1 !text-xs col-span-2" />
+                  <button type="button" onClick={() => setTbRows(rows => rows.length > 1 ? rows.filter((_, j) => j !== i) : rows)}
+                    className="text-subtext hover:text-danger col-span-1 flex justify-center"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              ))}
+            </div>
+          )}
           {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={addWO} disabled={saving || !form.wo_number.trim()} className="eg-btn-primary w-full justify-center">
+          <button onClick={addWO} disabled={saving || !form.wo_number.trim() || (isDesign && !tbRows.some(r => r.description.trim()))} className="eg-btn-primary w-full justify-center">
             {saving ? "جاري الحفظ..." : "حفظ وفتح الأمر"}
           </button>
         </div>
