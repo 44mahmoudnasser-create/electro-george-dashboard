@@ -105,6 +105,8 @@ export default function WODetailClient({
   const [priority, setPriority] = useState<string>(wo.priority ?? "متوسطة");
   const [planMonth, setPlanMonth] = useState<string>(wo.plan_month ?? "");
   const [desc, setDesc] = useState<string>(wo.description ?? "");
+  const [clientName, setClientName] = useState<string>(wo.client_name ?? "");
+  const [projectName, setProjectName] = useState<string>(wo.project_name ?? "");
 
   // ── حالة الأقسام + الحالة العامة (من الداتابيز) ──
   const canSetStatus = role === "manager"; // الحالة العامة للأمر والتعديل على كل الأقسام: المدير بس
@@ -153,7 +155,10 @@ export default function WODetailClient({
     setSaving(true);
     const patch: any = {
       expected_delivery: delivery || null, priority, plan_month: planMonth || null,
-      description: desc.trim() || null, ...checks,
+      description: desc.trim() || null,
+      client_name: clientName.trim() || null,
+      project_name: projectName.trim() || null,
+      ...checks,
     };
     const { error } = await supabase.from("work_orders").update(patch).eq("id", wo.id);
     setSaving(false);
@@ -173,7 +178,7 @@ export default function WODetailClient({
   const activeItem = items.find(it => it.id === activeItemId) ?? null;
   // BOM وقائمة الإنتاج للبند: المدير أي وقت، ومكتب التصميم بعد اعتماد البند بس
   const canAddChildren = isManager || (isDesign && activeItem?.status === "approved");
-  const [newItem, setNewItem] = useState({ description: "", qty: "1", part_no: "" });
+  const [newItem, setNewItem] = useState({ description: "", qty: "1" });
   const [busyDesign, setBusyDesign] = useState(false);
 
   const sendItem = async (id: number) => {
@@ -200,13 +205,13 @@ export default function WODetailClient({
     setBusyDesign(true);
     const { data, error } = await supabase.from("work_order_items").insert({
       wo_id: wo.id, item_no: nextNo, description: newItem.description.trim(),
-      qty: parseFloat(newItem.qty) || 1, part_no: newItem.part_no.trim() || null,
+      qty: parseFloat(newItem.qty) || 1,
     }).select("*").single();
     setBusyDesign(false);
     if (error) { flash(false, error.message); return; }
     setItems(prev => [...prev, data]);
     setActiveItemId(prev => prev ?? data.id);
-    setNewItem({ description: "", qty: "1", part_no: "" });
+    setNewItem({ description: "", qty: "1" });
   };
 
   const removeItem = async (id: number) => {
@@ -608,6 +613,16 @@ export default function WODetailClient({
         </div>
 
         <fieldset disabled={!isManager} className="contents">
+        {/* ═══ العميل والمشروع ═══ */}
+        <div className="eg-card !p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="اسم العميل">
+            <input value={clientName} onChange={e => setInfo<string>(setClientName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+          </Field>
+          <Field label="اسم المشروع">
+            <input value={projectName} onChange={e => setInfo<string>(setProjectName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+          </Field>
+        </div>
+
         {/* ═══ وصف الأمر ═══ */}
         <div className="eg-card !p-4">
           <Field label="وصف الأمر">
@@ -626,19 +641,18 @@ export default function WODetailClient({
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-subtext">البند الحالي للـ BOM والإنتاج:</span>
                 <select value={activeItemId ?? ""} onChange={e => setActiveItemId(Number(e.target.value))} className="eg-select !py-1 !text-xs w-56">
-                  {items.map(it => <option key={it.id} value={it.id}>{it.item_no}. {it.description}</option>)}
+                  {items.map(it => <option key={it.id} value={it.id}>#{it.item_no} {it.description}</option>)}
                 </select>
               </div>
             )}
           </div>
           {items.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse min-w-[560px]">
+              <table className="w-full text-xs border-collapse min-w-[460px]">
                 <thead><tr className="bg-card2 text-subtext">
-                  <th className="px-3 py-1.5 text-center font-semibold w-12">#</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-14">#</th>
                   <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
-                  <th className="px-3 py-1.5 text-right font-semibold w-32">رقم الصنف</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-44">الاعتماد</th>
                   <th className="w-10" />
                 </tr></thead>
@@ -646,10 +660,9 @@ export default function WODetailClient({
                   {items.map(it => (
                     <tr key={it.id} onClick={() => setActiveItemId(it.id)}
                       className={cn("border-t border-border/40 cursor-pointer hover:bg-card2/50", activeItemId === it.id && "bg-accent/5")}>
-                      <td className="px-3 py-1.5 text-center tabular-nums">{it.item_no}</td>
+                      <td className="px-3 py-1.5 text-center font-mono text-accent">{it.item_no}</td>
                       <td className="px-3 py-1.5 text-text">{it.description}</td>
                       <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
-                      <td className="px-3 py-1.5 font-mono text-subtext">{it.part_no ?? "—"}</td>
                       <td className="px-3 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                         {it.status === "approved" && <span className="text-[11px] text-success">معتمد</span>}
                         {it.status === "pending" && (
@@ -678,14 +691,11 @@ export default function WODetailClient({
           ) : <p className="text-xs text-subtext">مفيش بنود بعد</p>}
           {(isManager || isDesign) && (
             <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-              <div className="md:col-span-5"><Field label="وصف البند">
+              <div className="md:col-span-8"><Field label="وصف البند">
                 <input value={newItem.description} onChange={e => setNewItem(f => ({ ...f, description: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
               </Field></div>
               <div className="md:col-span-2"><Field label="الكمية">
                 <input type="number" min="0.01" step="any" value={newItem.qty} onChange={e => setNewItem(f => ({ ...f, qty: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
-              </Field></div>
-              <div className="md:col-span-3"><Field label="رقم الصنف">
-                <input value={newItem.part_no} onChange={e => setNewItem(f => ({ ...f, part_no: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
               </Field></div>
               <div className="md:col-span-2">
                 <button onClick={addItem} disabled={busyDesign || !newItem.description.trim()} className="eg-btn-primary !py-1.5 !text-xs w-full justify-center">
@@ -699,36 +709,15 @@ export default function WODetailClient({
           )}
         </div>
 
-        {/* ═══ Total BOM (مقفول) ═══ */}
-        <div className="eg-card !p-4 space-y-3">
-          <div className="flex items-center justify-between">
+        {/* ═══ Total BOM: صفحة لوحدها ═══ */}
+        <div className="eg-card !p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div>
             <h2 className="text-sm font-bold text-text">Total BOM (الأمر كله)</h2>
-            <span className="text-[10px] text-subtext">مكتوب مع إنشاء الأمر، ومقفول</span>
+            <p className="text-[11px] text-subtext">{totalBom.length > 0 ? `${totalBom.length} سطر — مقفول` : "لم يُكتب بعد"}</p>
           </div>
-          {totalBom.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse min-w-[520px]">
-                <thead><tr className="bg-card2 text-subtext">
-                  <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
-                  <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
-                  <th className="px-3 py-1.5 text-center font-semibold w-20">الوحدة</th>
-                  <th className="px-3 py-1.5 text-right font-semibold w-32">رقم الصنف</th>
-                  <th className="px-3 py-1.5 text-right font-semibold">ملاحظة</th>
-                </tr></thead>
-                <tbody>
-                  {totalBom.map(t => (
-                    <tr key={t.id} className="border-t border-border/40">
-                      <td className="px-3 py-1.5 text-text">{t.description}</td>
-                      <td className="px-3 py-1.5 text-center tabular-nums">{t.qty}</td>
-                      <td className="px-3 py-1.5 text-center">{t.unit ?? "—"}</td>
-                      <td className="px-3 py-1.5 font-mono text-subtext">{t.part_no ?? "—"}</td>
-                      <td className="px-3 py-1.5 text-subtext">{t.remark ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <p className="text-xs text-subtext">مفيش Total BOM</p>}
+          <button onClick={() => router.push(`/work-orders/${wo.id}/total-bom`)} className="eg-btn-ghost !py-1.5 !text-xs">
+            فتح Total BOM
+          </button>
         </div>
 
         {/* ═══ التبويبات ═══ */}
