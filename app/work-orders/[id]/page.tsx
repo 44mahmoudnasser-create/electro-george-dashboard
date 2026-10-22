@@ -39,7 +39,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
     supabase.from("wo_production_items").select("*").eq("work_order_id", woId).order("id", { ascending: true }),
     // RLS بتفلتر تلقائي: كل قسم يشوف بنوده هو بس، والمدير يشوف الكل
     supabase.from("wo_bom_items").select("*").eq("work_order_id", woId).order("s_no", { ascending: true, nullsFirst: false }),
-    supabase.from("wo_department_status").select("department, status").eq("wo_id", woId),
+    supabase.from("wo_department_status").select("item_id, department, status").eq("wo_id", woId),
     supabase.from("departments").select("code, aliases").eq("active", true),
     supabase.from("work_order_items").select("*").eq("wo_id", woId).order("item_no", { ascending: true }),
     supabase.from("wo_total_bom").select("*").eq("wo_id", woId).order("s_no", { ascending: true, nullsFirst: false }),

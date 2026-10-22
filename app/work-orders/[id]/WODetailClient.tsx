@@ -75,7 +75,7 @@ export default function WODetailClient({
   wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, initialItems, initialTotalBom, isDesign, currentUserName, departmentAliases, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
-  initialProdItems: any[]; deptStatus: { department: string; status: string }[];
+  initialProdItems: any[]; deptStatus: { item_id: number; department: string; status: string }[];
   myDeptCode: string | null;
   initialItems: any[];
   initialTotalBom: any[];
@@ -104,10 +104,8 @@ export default function WODetailClient({
     isManager || (myDeptCode !== null && resolveDeptCode(it.department) === myDeptCode);
 
   /* ─────────── بيانات الأمر (تعديل) ─────────── */
+  // الحالة والأولوية والتسليم وشهر الخطة بقوا على البند (مش على الأمر)
   const [status, setStatus] = useState<string>(wo.status);
-  const [delivery, setDelivery] = useState<string>(wo.expected_delivery ?? "");
-  const [priority, setPriority] = useState<string>(wo.priority ?? "متوسطة");
-  const [planMonth, setPlanMonth] = useState<string>(wo.plan_month ?? "");
   const [desc, setDesc] = useState<string>(wo.description ?? "");
   const [clientName, setClientName] = useState<string>(wo.client_name ?? "");
   const [projectName, setProjectName] = useState<string>(wo.project_name ?? "");
@@ -133,9 +131,10 @@ export default function WODetailClient({
   };
 
   const changeDeptStatus = async (dept: string, next: string) => {
-    const { error } = await supabase.rpc("set_department_status", { p_wo_id: wo.id, p_dept: dept, p_status: next });
+    if (activeItemId == null) return;
+    const { error } = await supabase.rpc("set_item_department_status", { p_item_id: activeItemId, p_dept: dept, p_status: next });
     if (error) { flash(false, error.message); return; }
-    setDeptRows(prev => prev.map(d => d.department === dept ? { ...d, status: next } : d));
+    setDeptRows(prev => prev.map(d => (d.item_id === activeItemId && d.department === dept) ? { ...d, status: next } : d));
     flash(true, `تم تحديث حالة ${deptLabel(dept)}`);
   };
 
@@ -153,12 +152,10 @@ export default function WODetailClient({
     setTimeout(() => setNotice(null), 3000);
   };
 
-  const isLate = !!delivery && delivery < todayStr && !DONE.includes(status);
 
   const saveInfo = async () => {
     setSaving(true);
     const patch: any = {
-      expected_delivery: delivery || null, priority, plan_month: planMonth || null,
       description: desc.trim() || null,
       client_name: clientName.trim() || null,
       project_name: projectName.trim() || null,
@@ -177,11 +174,14 @@ export default function WODetailClient({
   /* ─────────── قائمة إنتاج الأمر ─────────── */
   // ── مكتب التصميم: البنود (كل بند له اعتماده) و Total BOM ──
   const [items, setItems] = useState<any[]>(initialItems);
+  // متأخر لو أي بند عنده موعد تسليم فات ولسه ماتسلمش
+  const isLate = items.some(it => !!it.expected_delivery && it.expected_delivery < todayStr && !DONE.includes(it.job_status));
   const [totalBom] = useState<any[]>(initialTotalBom);   // مقفول: للقراءة بس
   const [activeItemId, setActiveItemId] = useState<number | null>(initialItems[0]?.id ?? null);
   const activeItem = items.find(it => it.id === activeItemId) ?? null;
   // BOM وقائمة الإنتاج للبند: المدير أي وقت، ومكتب التصميم بعد اعتماد البند بس
   const canAddChildren = isManager || (isDesign && activeItem?.status === "approved");
+  const activeDeptRows = deptRows.filter(d => d.item_id === activeItemId);
   const [newItem, setNewItem] = useState({ description: "", qty: "1" });
   const [busyDesign, setBusyDesign] = useState(false);
 
@@ -201,6 +201,13 @@ export default function WODetailClient({
     if (error) { flash(false, error.message); return; }
     setItems(prev => prev.map(it => it.id === id ? { ...it, status: "approved", approved_at: new Date().toISOString() } : it));
     flash(true, "تم اعتماد البند");
+  };
+
+  const updateItemField = async (id: number, patch: Record<string, any>) => {
+    const { error } = await supabase.from("work_order_items").update(patch).eq("id", id);
+    if (error) { flash(false, error.message); return; }
+    setItems(prev => prev.map(it => it.id === id ? { ...it, ...patch } : it));
+    router.refresh();
   };
 
   const addItem = async () => {
@@ -514,7 +521,6 @@ export default function WODetailClient({
           <div className="flex items-center gap-2 min-w-0">
             <h1 className="text-lg font-bold font-mono text-text truncate">{wo.wo_number}</h1>
             <Badge label={status} />
-            <span className={cn("text-[11px] px-2 py-0.5 rounded", PRIORITY_STYLE[priority] ?? PRIORITY_STYLE["منخفضة"])}>{priority}</span>
             {isLate && <span className="text-[11px] px-2 py-0.5 rounded bg-danger/15 text-danger font-semibold">متأخر</span>}
           </div>
           <div className="flex-1" />
@@ -525,8 +531,7 @@ export default function WODetailClient({
         </div>
         <p className="text-[11px] text-subtext mt-1.5">
           أُنشئ {wo.created_date ?? "—"}
-          {" · "}التسليم {delivery || "—"}
-          {" · "}شهر الخطة {planMonth || "—"}
+          {" · "}{items.length} بند
           {prodItems.length > 0 && <>{" · "}الإنجاز: <span className="text-text tabular-nums">{prodTotals.assembly}/{prodTotals.qty}</span> تجميع</>}
         </p>
       </div>
@@ -546,28 +551,6 @@ export default function WODetailClient({
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold text-text">بيانات الأمر</h2>
                 {!canEditOrder && <span className="text-[10px] text-subtext">للقراءة فقط، بيعدّلها المدير</span>}
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <Field label="الحالة العامة">
-                  {canSetStatus ? (
-                    <select value={status} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
-                      {STATUSES.map(s => <option key={s}>{s}</option>)}
-                    </select>
-                  ) : (
-                    <p className="text-xs text-text py-1.5">{status}</p>
-                  )}
-                </Field>
-                <Field label="الأولوية">
-                  <select value={priority} onChange={e => setInfo<string>(setPriority)(e.target.value)} className="eg-select !py-1.5 !text-xs">
-                    {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-                  </select>
-                </Field>
-                <Field label="التسليم المتوقع">
-                  <input type="date" value={delivery} onChange={e => setInfo<string>(setDelivery)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
-                </Field>
-                <Field label="شهر الخطة">
-                  <input type="month" value={planMonth} onChange={e => setInfo<string>(setPlanMonth)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
-                </Field>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="اسم العميل">
@@ -599,11 +582,15 @@ export default function WODetailClient({
           </div>
           {items.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse min-w-[460px]">
+              <table className="w-full text-xs border-collapse min-w-[860px]">
                 <thead><tr className="bg-card2 text-subtext">
                   <th className="px-3 py-1.5 text-center font-semibold w-14">#</th>
                   <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-28">الحالة</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-24">الأولوية</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-32">التسليم المتوقع</th>
+                  <th className="px-3 py-1.5 text-center font-semibold w-28">شهر الخطة</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-44">الاعتماد</th>
                   <th className="w-10" />
                 </tr></thead>
@@ -614,6 +601,36 @@ export default function WODetailClient({
                       <td className="px-3 py-1.5 text-center font-mono text-accent">{it.item_no}</td>
                       <td className="px-3 py-1.5 text-text">{it.description}</td>
                       <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
+                      <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
+                        {isManager ? (
+                          <select value={it.job_status} onChange={e => updateItemField(it.id, { job_status: e.target.value })}
+                            className="eg-select !py-0.5 !text-[11px] w-24">
+                            {STATUSES.map(s => <option key={s}>{s}</option>)}
+                          </select>
+                        ) : <span className="text-[11px] text-text">{it.job_status}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
+                        {isManager ? (
+                          <select value={it.priority} onChange={e => updateItemField(it.id, { priority: e.target.value })}
+                            className="eg-select !py-0.5 !text-[11px] w-20">
+                            {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+                          </select>
+                        ) : <span className="text-[11px] text-text">{it.priority}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
+                        {isManager ? (
+                          <input type="date" value={it.expected_delivery ?? ""}
+                            onChange={e => updateItemField(it.id, { expected_delivery: e.target.value || null })}
+                            className="eg-input !py-0.5 !text-[11px] w-32" />
+                        ) : <span className="text-[11px] text-text">{it.expected_delivery ?? "—"}</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
+                        {isManager ? (
+                          <input type="month" value={it.plan_month ?? ""}
+                            onChange={e => updateItemField(it.id, { plan_month: e.target.value || null })}
+                            className="eg-input !py-0.5 !text-[11px] w-28" />
+                        ) : <span className="text-[11px] text-text">{it.plan_month ?? "—"}</span>}
+                      </td>
                       <td className="px-3 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                         {it.status === "approved" && <span className="text-[11px] text-success">معتمد</span>}
                         {it.status === "pending" && (
@@ -680,17 +697,17 @@ export default function WODetailClient({
         {/* ═══ حالة الأقسام ═══ */}
         <div className="eg-card !p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
-            {deptRows.length > 0 ? (
+            <h2 className="text-sm font-bold text-text">حالة الأقسام {activeItem ? `— البند #${activeItem.item_no}` : ""}</h2>
+            {activeDeptRows.length > 0 ? (
               <span className="text-[11px] text-subtext tabular-nums">
-                {deptRows.filter(d => d.status === "مكتمل").length} / {deptRows.length} مكتمل
+                {activeDeptRows.filter(d => d.status === "مكتمل").length} / {activeDeptRows.length} مكتمل
               </span>
             ) : (
               <span className="text-[11px] text-warning">مفيش أقسام مربوطة بالأمر (راجع migrations 008 و009)</span>
             )}
           </div>
           <div className="divide-y divide-border/40">
-            {deptRows.map(d => {
+            {activeDeptRows.map(d => {
               const mine = role === "manager" || myDeptCode === d.department;
               return (
                 <div key={d.department} className="flex items-center justify-between gap-3 py-2">
