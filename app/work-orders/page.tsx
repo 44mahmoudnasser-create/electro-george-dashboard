@@ -20,7 +20,7 @@ export default async function WorkOrdersPage() {
   const { data: wos } = await supabase.from("work_orders").select("*").order("id", { ascending: false });
   return (
     <AppShell role={role}>
-      <WorkOrdersClient initialWOs={wos ?? []} role={role} canCreate={canCreate} />
+      <WorkOrdersClient initialWOs={wos ?? []} role={role} canCreate={canCreate} isDesign={myCode === "DESIGN"} />
     </AppShell>
   );
 }
