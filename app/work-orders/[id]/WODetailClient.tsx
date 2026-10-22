@@ -535,103 +535,47 @@ export default function WODetailClient({
           </div>
         )}
 
-        <fieldset disabled={!isManager} className="contents">
-        {/* ═══ بيانات الأمر ═══ */}
-        <div className="eg-card !p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <div className="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Field label="الحالة العامة">
-              {canSetStatus ? (
-                <select value={status} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
-                  {STATUSES.map(s => <option key={s}>{s}</option>)}
-                </select>
-              ) : (
-                <p className="text-xs text-text py-1.5">{status}</p>
-              )}
-            </Field>
-            <Field label="الأولوية">
-              <select value={priority} onChange={e => setInfo<string>(setPriority)(e.target.value)} className="eg-select !py-1.5 !text-xs">
-                {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-              </select>
-            </Field>
-            <Field label="التسليم المتوقع">
-              <input type="date" value={delivery} onChange={e => setInfo<string>(setDelivery)(e.target.value)}
-                className="eg-input !py-1.5 !text-xs" />
-            </Field>
-            <Field label="شهر الخطة">
-              <input type="month" value={planMonth} onChange={e => setInfo<string>(setPlanMonth)(e.target.value)}
-                className="eg-input !py-1.5 !text-xs" />
-            </Field>
-          </div>
-          <div className="lg:col-span-4">
-            <p className="text-[11px] text-subtext mb-1.5">قائمة التحقق</p>
-            <div className="space-y-1.5">
-              {CHECKLIST.map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer text-xs text-text">
-                  <input type="checkbox" checked={checks[key]}
-                    onChange={e => setInfo<boolean>(v => setChecks(c => ({ ...c, [key]: v })))(e.target.checked)}
-                    className="w-4 h-4 accent-emerald-500" />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-        </fieldset>
-
-        {/* ═══ حالة الأقسام ═══ */}
-        <div className="eg-card !p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
-            {deptRows.length > 0 ? (
-              <span className="text-[11px] text-subtext tabular-nums">
-                {deptRows.filter(d => d.status === "مكتمل").length} / {deptRows.length} مكتمل
-              </span>
-            ) : (
-              <span className="text-[11px] text-warning">مفيش أقسام مربوطة بالأمر (راجع migrations 008 و009)</span>
-            )}
-          </div>
-          <div className="divide-y divide-border/40">
-            {deptRows.map(d => {
-              const mine = role === "manager" || myDeptCode === d.department;
-              return (
-                <div key={d.department} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-xs text-text">{deptLabel(d.department)}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <select value={d.status} disabled={!mine}
-                      onChange={e => changeDeptStatus(d.department, e.target.value)}
-                      className="eg-select !py-1 !text-xs w-32 disabled:opacity-50">
-                      {["لم يبدأ", "جاري", "متوقف", "مكتمل"].map(s => <option key={s}>{s}</option>)}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+          <div className="xl:col-span-2 space-y-4">
+            <fieldset disabled={!isManager} className="contents">
+            <div className="eg-card !p-4 space-y-4">
+              <h2 className="text-sm font-bold text-text">بيانات الأمر</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Field label="الحالة العامة">
+                  {canSetStatus ? (
+                    <select value={status} onChange={e => changeStatus(e.target.value, false)} className="eg-select !py-1.5 !text-xs">
+                      {STATUSES.map(s => <option key={s}>{s}</option>)}
                     </select>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {role !== "manager" && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
-        </div>
-
-        <fieldset disabled={!isManager} className="contents">
-        {/* ═══ العميل والمشروع ═══ */}
-        <div className="eg-card !p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="اسم العميل">
-            <input value={clientName} onChange={e => setInfo<string>(setClientName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
-          </Field>
-          <Field label="اسم المشروع">
-            <input value={projectName} onChange={e => setInfo<string>(setProjectName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
-          </Field>
-        </div>
-
-        {/* ═══ وصف الأمر ═══ */}
-        <div className="eg-card !p-4">
-          <Field label="وصف الأمر">
-            <textarea rows={3} value={desc}
-              onChange={e => setInfo<string>(setDesc)(e.target.value)}
-              className="eg-input !h-auto py-2 !text-xs" placeholder="المنتج، المطلوب، ملاحظات التنفيذ..." />
-          </Field>
-        </div>
-        </fieldset>
+                  ) : (
+                    <p className="text-xs text-text py-1.5">{status}</p>
+                  )}
+                </Field>
+                <Field label="الأولوية">
+                  <select value={priority} onChange={e => setInfo<string>(setPriority)(e.target.value)} className="eg-select !py-1.5 !text-xs">
+                    {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+                  </select>
+                </Field>
+                <Field label="التسليم المتوقع">
+                  <input type="date" value={delivery} onChange={e => setInfo<string>(setDelivery)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+                </Field>
+                <Field label="شهر الخطة">
+                  <input type="month" value={planMonth} onChange={e => setInfo<string>(setPlanMonth)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="اسم العميل">
+                  <input value={clientName} onChange={e => setInfo<string>(setClientName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+                </Field>
+                <Field label="اسم المشروع">
+                  <input value={projectName} onChange={e => setInfo<string>(setProjectName)(e.target.value)} className="eg-input !py-1.5 !text-xs" />
+                </Field>
+              </div>
+              <Field label="وصف الأمر">
+                <textarea rows={3} value={desc} onChange={e => setInfo<string>(setDesc)(e.target.value)}
+                  className="eg-input !h-auto py-2 !text-xs" placeholder="المنتج، المطلوب، ملاحظات التنفيذ..." />
+              </Field>
+            </div>
+            </fieldset>
 
         {/* ═══ البنود (كل بند ليه اعتماده) ═══ */}
         <div className="eg-card !p-4 space-y-3">
@@ -709,7 +653,58 @@ export default function WODetailClient({
           )}
         </div>
 
-        {/* ═══ Total BOM: صفحة لوحدها ═══ */}
+          </div>
+
+          <div className="space-y-4">
+            <fieldset disabled={!isManager} className="contents">
+            <div className="eg-card !p-4 space-y-2">
+              <h2 className="text-sm font-bold text-text mb-1">قائمة التحقق</h2>
+              {CHECKLIST.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer text-xs text-text">
+                  <input type="checkbox" checked={checks[key]}
+                    onChange={e => setInfo<boolean>(v => setChecks(c => ({ ...c, [key]: v })))(e.target.checked)}
+                    className="w-4 h-4 accent-emerald-500" />
+                  {label}
+                </label>
+              ))}
+            </div>
+            </fieldset>
+
+        {/* ═══ حالة الأقسام ═══ */}
+        <div className="eg-card !p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-bold text-text">حالة الأقسام</h2>
+            {deptRows.length > 0 ? (
+              <span className="text-[11px] text-subtext tabular-nums">
+                {deptRows.filter(d => d.status === "مكتمل").length} / {deptRows.length} مكتمل
+              </span>
+            ) : (
+              <span className="text-[11px] text-warning">مفيش أقسام مربوطة بالأمر (راجع migrations 008 و009)</span>
+            )}
+          </div>
+          <div className="divide-y divide-border/40">
+            {deptRows.map(d => {
+              const mine = role === "manager" || myDeptCode === d.department;
+              return (
+                <div key={d.department} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs text-text">{deptLabel(d.department)}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <select value={d.status} disabled={!mine}
+                      onChange={e => changeDeptStatus(d.department, e.target.value)}
+                      className="eg-select !py-1 !text-xs w-32 disabled:opacity-50">
+                      {["لم يبدأ", "جاري", "متوقف", "مكتمل"].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {role !== "manager" && <p className="text-[10px] text-subtext mt-2">بتقدر تعدّل حالة قسمك بس، والحالة العامة للأمر بيعدّلها المدير.</p>}
+        </div>
+
+            {/* ═══ Total BOM: صفحة لوحدها ═══ */}
         <div className="eg-card !p-4 flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h2 className="text-sm font-bold text-text">Total BOM (الأمر كله)</h2>
@@ -718,6 +713,9 @@ export default function WODetailClient({
           <button onClick={() => router.push(`/work-orders/${wo.id}/total-bom`)} className="eg-btn-ghost !py-1.5 !text-xs">
             فتح Total BOM
           </button>
+        </div>
+
+          </div>
         </div>
 
         {/* ═══ التبويبات ═══ */}
