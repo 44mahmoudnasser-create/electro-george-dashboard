@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 type Row = { description: string; qty: string; unit: string; part_no: string; remark: string };
 type SavedRow = { id: number; s_no: number | null; qty: number; unit: string | null; description: string; part_no: string | null; remark: string | null };
 const EMPTY: Row = { description: "", qty: "1", unit: "", part_no: "", remark: "" };
+const COLS = ["description", "qty", "unit", "part_no", "remark"] as const;
 
 export default function TotalBomClient({
   wo, initialRows, canWrite,
@@ -31,6 +32,32 @@ export default function TotalBomClient({
 
   const update = (i: number, patch: Partial<Row>) =>
     setRows(prev => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  // لصق من Excel: كل سطر بيتحول لصف، وكل عمود بيتحط في الخانة الصح
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {
+    const text = e.clipboardData.getData("text");
+    if (!text.includes("\t") && !text.includes("\n")) return;   // لصق عادي من غير جدول
+    e.preventDefault();
+    const lines = text.replace(/\r/g, "").split("\n").filter(l => l.trim() !== "");
+    setRows(prev => {
+      const next = [...prev];
+      lines.forEach((line, k) => {
+        let cells = line.split("\t").map(c => c.trim());
+        // لو الجدول جاي بعمود S.NO في الأول (6 أعمدة) نشيله
+        if (cells.length === 6 && /^\d+$/.test(cells[0])) cells = cells.slice(1);
+        const t = rowIdx + k;
+        while (next.length <= t) next.push({ ...EMPTY });
+        const row: any = { ...next[t] };
+        cells.forEach((val, j) => {
+          const col = COLS[colIdx + j];
+          if (col) row[col] = val;
+        });
+        next[t] = row;
+      });
+      return next;
+    });
+    flash(true, `اتلصق ${lines.length} سطر`);
+  };
 
   const save = async () => {
     const payload = rows
@@ -123,29 +150,29 @@ export default function TotalBomClient({
           <div className="eg-card !p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-text">كتابة Total BOM</h2>
-              <span className="text-[10px] text-warning">بعد الحفظ هيتقفل نهائياً</span>
+              <span className="text-[10px] text-warning">بعد الحفظ هيتقفل نهائياً · تقدر تلصق جدول كامل من Excel في أي خانة</span>
             </div>
             {rows.map((r, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-end">
                 <div className="col-span-12 md:col-span-4">
                   <label className="block text-[11px] text-subtext mb-1">الوصف</label>
-                  <input value={r.description} onChange={e => update(i, { description: e.target.value })} className="eg-input !py-1.5 !text-xs" />
+                  <input value={r.description} onChange={e => update(i, { description: e.target.value })} onPaste={e => handlePaste(e, i, 0)} className="eg-input !py-1.5 !text-xs" />
                 </div>
                 <div className="col-span-4 md:col-span-2">
                   <label className="block text-[11px] text-subtext mb-1">الكمية</label>
-                  <input type="number" min="0.01" step="any" value={r.qty} onChange={e => update(i, { qty: e.target.value })} className="eg-input !py-1.5 !text-xs" />
+                  <input type="number" min="0.01" step="any" value={r.qty} onChange={e => update(i, { qty: e.target.value })} onPaste={e => handlePaste(e, i, 1)} className="eg-input !py-1.5 !text-xs" />
                 </div>
                 <div className="col-span-4 md:col-span-1">
                   <label className="block text-[11px] text-subtext mb-1">الوحدة</label>
-                  <input value={r.unit} onChange={e => update(i, { unit: e.target.value })} className="eg-input !py-1.5 !text-xs" />
+                  <input value={r.unit} onChange={e => update(i, { unit: e.target.value })} onPaste={e => handlePaste(e, i, 2)} className="eg-input !py-1.5 !text-xs" />
                 </div>
                 <div className="col-span-4 md:col-span-2">
                   <label className="block text-[11px] text-subtext mb-1">رقم الصنف</label>
-                  <input value={r.part_no} onChange={e => update(i, { part_no: e.target.value })} className="eg-input !py-1.5 !text-xs" />
+                  <input value={r.part_no} onChange={e => update(i, { part_no: e.target.value })} onPaste={e => handlePaste(e, i, 3)} className="eg-input !py-1.5 !text-xs" />
                 </div>
                 <div className="col-span-10 md:col-span-2">
                   <label className="block text-[11px] text-subtext mb-1">ملاحظة</label>
-                  <input value={r.remark} onChange={e => update(i, { remark: e.target.value })} className="eg-input !py-1.5 !text-xs" />
+                  <input value={r.remark} onChange={e => update(i, { remark: e.target.value })} onPaste={e => handlePaste(e, i, 4)} className="eg-input !py-1.5 !text-xs" />
                 </div>
                 <div className="col-span-2 md:col-span-1 flex justify-center">
                   <button onClick={() => setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)}
