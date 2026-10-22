@@ -30,9 +30,9 @@ export default async function DashboardPage() {
     .order("date", { ascending: false });
   if (!isManager) violationsQuery = violationsQuery.eq("technician.department", department);
 
-  const [{ data: wos }, { data: attendance }, { data: purchaseItems }, { data: violations }] = await Promise.all([
-    supabase.from("work_orders")
-      .select("id, wo_number, description, status, priority, plan_month, expected_delivery, completion_date, department")
+  const [{ data: items }, { data: attendance }, { data: purchaseItems }, { data: violations }] = await Promise.all([
+    supabase.from("work_order_items")
+      .select("id, wo_id, item_no, description, qty, job_status, priority, expected_delivery, plan_month, work_order:work_orders(wo_number, client_name, project_name)")
       .order("expected_delivery", { ascending: true, nullsFirst: false }),
     attendanceQuery,
     supabase.from("purchase_items")
@@ -46,7 +46,7 @@ export default async function DashboardPage() {
   return (
     <AppShell role={role}>
       <DashboardClient
-        wos={(wos ?? []) as any[]}
+        items={(items ?? []) as any[]}
         attendance={(attendance ?? []) as any[]}
         purchaseItems={(purchaseItems ?? []) as any[]}
         violationsThisMonth={violations?.length ?? 0}
