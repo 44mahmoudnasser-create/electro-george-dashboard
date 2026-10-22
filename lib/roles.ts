@@ -10,6 +10,9 @@ export const DEPT_LABEL: Record<string, string> = {
   SHEET: "قسم الصاج",
   PAINT: "قسم الدهان",
   ASSEMBLY: "قسم التجميع",
+  ELEC_ASSEMBLY: "التجميع الكهربي",
+  MECH_ASSEMBLY: "التجميع الميكانيكي",
+  DESIGN: "مكتب التصميم",
 };
 
 export const roleLabel = (role?: string | null) =>
