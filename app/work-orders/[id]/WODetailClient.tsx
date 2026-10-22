@@ -90,6 +90,8 @@ export default function WODetailClient({
   const isManager = role === "manager";
   // فورم إضافة البند وزرار حذفه: مكتب التصميم بس (المدير حتى لو قسمه تصميم مايشوفهمش)
   const isDesignOnly = isDesign && !isManager;
+  // بيانات الأمر (الحالة، الأولوية، التسليم، شهر الخطة، العميل، المشروع، الوصف): المدير بس، ومكتب التصميم مايعدلهاش بعد الإنشاء
+  const canEditOrder = isManager && !isDesign;
 
   // تحويل أي قيمة قسم قديمة للـ code (زي resolve_department في الداتابيز)
   const resolveDeptCode = (raw: string | null | undefined) => {
@@ -111,7 +113,7 @@ export default function WODetailClient({
   const [projectName, setProjectName] = useState<string>(wo.project_name ?? "");
 
   // ── حالة الأقسام + الحالة العامة (من الداتابيز) ──
-  const canSetStatus = role === "manager"; // الحالة العامة للأمر والتعديل على كل الأقسام: المدير بس
+  const canSetStatus = canEditOrder; // الحالة العامة للأمر: المدير بس
   const [deptRows, setDeptRows] = useState(deptStatus);
   const [statusConfirm, setStatusConfirm] = useState<{ next: string; incomplete: string[] } | null>(null);
 
@@ -517,7 +519,7 @@ export default function WODetailClient({
           </div>
           <div className="flex-1" />
           {dirtyInfo && <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning">تعديلات غير محفوظة</span>}
-          <button onClick={saveInfo} disabled={saving || !dirtyInfo || !isManager} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
+          <button onClick={saveInfo} disabled={saving || !dirtyInfo || !canEditOrder} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
             <Save className="w-3.5 h-3.5" />{saving ? "جاري الحفظ..." : "حفظ البيانات"}
           </button>
         </div>
@@ -539,9 +541,12 @@ export default function WODetailClient({
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
           <div className="xl:col-span-2 space-y-4">
-            <fieldset disabled={!isManager} className="contents">
-            <div className="eg-card !p-4 space-y-4">
-              <h2 className="text-sm font-bold text-text">بيانات الأمر</h2>
+            <fieldset disabled={!canEditOrder} className="contents">
+            <div className="eg-card !p-4 space-y-4 [&_:disabled]:opacity-60 [&_:disabled]:cursor-not-allowed">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold text-text">بيانات الأمر</h2>
+                {!canEditOrder && <span className="text-[10px] text-subtext">للقراءة فقط، بيعدّلها المدير</span>}
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Field label="الحالة العامة">
                   {canSetStatus ? (
@@ -658,7 +663,7 @@ export default function WODetailClient({
           </div>
 
           <div className="space-y-4">
-            <fieldset disabled={!isManager} className="contents">
+            <fieldset disabled={!canEditOrder} className="contents">
             <div className="eg-card !p-4 space-y-2">
               <h2 className="text-sm font-bold text-text mb-1">قائمة التحقق</h2>
               {CHECKLIST.map(({ key, label }) => (
