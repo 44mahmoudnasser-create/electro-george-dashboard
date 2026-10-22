@@ -88,6 +88,8 @@ export default function WODetailClient({
   const todayStr = today();
   const canManageLists = role === "manager";
   const isManager = role === "manager";
+  // فورم إضافة البند وزرار حذفه: مكتب التصميم بس (المدير حتى لو قسمه تصميم مايشوفهمش)
+  const isDesignOnly = isDesign && !isManager;
 
   // تحويل أي قيمة قسم قديمة للـ code (زي resolve_department في الداتابيز)
   const resolveDeptCode = (raw: string | null | undefined) => {
@@ -621,7 +623,7 @@ export default function WODetailClient({
                         )}
                       </td>
                       <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
-                        {it.status === "draft" && (isManager || isDesign) && (
+                        {it.status === "draft" && isDesignOnly && (
                           <button onClick={() => removeItem(it.id)} className="text-subtext hover:text-danger" title="حذف البند">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -633,7 +635,7 @@ export default function WODetailClient({
               </table>
             </div>
           ) : <p className="text-xs text-subtext">مفيش بنود بعد</p>}
-          {(isManager || isDesign) && (
+          {isDesignOnly && (
             <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
               <div className="md:col-span-8"><Field label="وصف البند">
                 <input value={newItem.description} onChange={e => setNewItem(f => ({ ...f, description: e.target.value }))} className="eg-input !py-1.5 !text-xs" />
