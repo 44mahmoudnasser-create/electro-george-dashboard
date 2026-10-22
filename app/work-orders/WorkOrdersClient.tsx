@@ -32,6 +32,8 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
   const router = useRouter();
   const pathname = usePathname();
   const todayStr = today();
+  // مكتب التصميم مايشوفش الحالة والأولوية والتسليم وشهر الخطة في فورم الإنشاء (المدير بيحددهم)
+  const isDesignOnly = isDesign && role !== "manager";
 
   const [wos, setWOs] = useState<WO[]>(initialWOs);
   const [search, setSearch] = useState("");
@@ -256,6 +258,7 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
             <input value={form.wo_number} onChange={e => setForm(f => ({ ...f, wo_number: e.target.value }))}
               className="eg-input font-mono" placeholder="مثال: WO-2026-001" />
           </div>
+          {!isDesignOnly && (
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="eg-label">الحالة</label>
@@ -280,6 +283,7 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
                 onChange={e => setForm(f => ({ ...f, plan_month: e.target.value }))} className="eg-input" />
             </div>
           </div>
+          )}
           <div>
             <label className="eg-label">الوصف</label>
             <textarea rows={3} value={form.description}

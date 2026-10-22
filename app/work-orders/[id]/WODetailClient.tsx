@@ -582,15 +582,18 @@ export default function WODetailClient({
           </div>
           {items.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse min-w-[860px]">
+              <table className={cn("w-full text-xs border-collapse", isDesignOnly ? "min-w-[560px]" : "min-w-[860px]")}>
                 <thead><tr className="bg-card2 text-subtext">
                   <th className="px-3 py-1.5 text-center font-semibold w-14">#</th>
                   <th className="px-3 py-1.5 text-right font-semibold">الوصف</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-20">الكمية</th>
+                  {/* الحالة والأولوية والتسليم وشهر الخطة: مكتب التصميم مايشوفهمش */}
+                  {!isDesignOnly && <>
                   <th className="px-3 py-1.5 text-center font-semibold w-28">الحالة</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-24">الأولوية</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-32">التسليم المتوقع</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-28">شهر الخطة</th>
+                  </>}
                   <th className="px-3 py-1.5 text-center font-semibold w-44">الاعتماد</th>
                   <th className="w-10" />
                 </tr></thead>
@@ -601,6 +604,7 @@ export default function WODetailClient({
                       <td className="px-3 py-1.5 text-center font-mono text-accent">{it.item_no}</td>
                       <td className="px-3 py-1.5 text-text">{it.description}</td>
                       <td className="px-3 py-1.5 text-center tabular-nums">{it.qty}</td>
+                      {!isDesignOnly && <>
                       <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                         {isManager ? (
                           <select value={it.job_status} onChange={e => updateItemField(it.id, { job_status: e.target.value })}
@@ -631,6 +635,7 @@ export default function WODetailClient({
                             className="eg-input !py-0.5 !text-[11px] w-28" />
                         ) : <span className="text-[11px] text-text">{it.plan_month ?? "—"}</span>}
                       </td>
+                      </>}
                       <td className="px-3 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                         {it.status === "approved" && <span className="text-[11px] text-success">معتمد</span>}
                         {it.status === "pending" && (
