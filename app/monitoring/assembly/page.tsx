@@ -35,7 +35,7 @@ export default async function AssemblyMonitoringPage() {
       .eq("department", "MECH_ASSEMBLY")
       .order("changed_at", { ascending: false })
       .limit(300),
-    supabase.from("technicians").select("id, name, grade, department").eq("department", "MECH_ASSEMBLY").order("name"),
+    supabase.from("technicians").select("id, name, grade, department").order("name"),
     supabase.from("departments").select("code, aliases").eq("active", true),
   ]);
 
