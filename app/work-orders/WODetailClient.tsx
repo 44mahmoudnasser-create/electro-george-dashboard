@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ClipboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -133,6 +133,8 @@ export default function WODetailClient({
   // ── حالة الأقسام + الحالة العامة (من الداتابيز) ──
   const canSetStatus = canEditOrder; // الحالة العامة للأمر: المدير بس
   const [deptRows, setDeptRows] = useState(deptStatus);
+  // أي تحديث من صفحة قسم التجميع (أو أي مكان تاني) بيتعكس هنا
+  useEffect(() => { setDeptRows(deptStatus); }, [deptStatus]);
   const [statusConfirm, setStatusConfirm] = useState<{ next: string; incomplete: string[] } | null>(null);
 
   const changeStatus = async (next: string, force: boolean) => {
@@ -614,6 +616,7 @@ export default function WODetailClient({
                   <th className="px-3 py-1.5 text-center font-semibold w-32">التسليم المتوقع</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-28">شهر الخطة</th>
                   </>}
+                  <th className="px-3 py-1.5 text-center font-semibold w-36">التجميع الميكانيكي</th>
                   <th className="px-3 py-1.5 text-center font-semibold w-44">الاعتماد</th>
                   <th className="w-10" />
                 </tr></thead>
@@ -656,6 +659,14 @@ export default function WODetailClient({
                         ) : <span className="text-[11px] text-text">{it.plan_month ?? "—"}</span>}
                       </td>
                       </>}
+                      <td className="px-2 py-1.5 text-center text-[11px]">
+                        {(() => {
+                          const mech = deptRows.find(d => d.item_id === it.id && d.department === "MECH_ASSEMBLY");
+                          if (!mech) return <span className="text-subtext">—</span>;
+                          const key = normalizeDeptStatus("MECH_ASSEMBLY", mech.status);
+                          return <span className="text-text">{MECH_STATUS_OPTIONS.find(o => o.key === key)?.label ?? key}</span>;
+                        })()}
+                      </td>
                       <td className="px-3 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                         {it.status === "approved" && <span className="text-[11px] text-success">معتمد</span>}
                         {it.status === "pending" && (
