@@ -625,10 +625,16 @@ function Timeline({ item, history, shortages }: { item: any; history: any[]; sho
   );
 }
 
-function GroupsModal({ open, onClose, groups, members, techs, onChanged, flash }: {
+function GroupsModal({ open, onClose, groups, members, techs: allTechs, onChanged, flash }: {
   open: boolean; onClose: () => void; groups: any[]; members: any[]; techs: any[];
   onChanged: () => void; flash: (ok: boolean, t: string) => void;
 }) {
+  // المشرفين بس (درجة مشرف) — ده اللي بيظهر وقت إنشاء الجروب وتغيير المشرف
+  const techs = allTechs
+    .filter(t => t.grade === "مشرف")
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), "ar"));
+  // الأعضاء: كل الفنيين اللي المستخدم شايفهم (المشرفين + فنيين قسمه)
+  const memberCandidates = [...allTechs].sort((a, b) => String(a.name).localeCompare(String(b.name), "ar"));
   const [name, setName] = useState("");
   const [sup, setSup] = useState("");
   const [busy, setBusy] = useState(false);
@@ -671,7 +677,7 @@ function GroupsModal({ open, onClose, groups, members, techs, onChanged, flash }
             <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم الجروب" className="eg-input !py-1 !text-xs col-span-5" />
             <select value={sup} onChange={e => setSup(e.target.value)} className="eg-select !py-1 !text-xs col-span-5">
               <option value="">— المشرف —</option>
-              {techs.map(t => <option key={t.id} value={t.id}>{t.name} ({t.grade})</option>)}
+              {techs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
             <button onClick={create} disabled={busy || !name.trim()} className="eg-btn-primary !py-1 !text-xs col-span-2 justify-center">
               <Plus className="w-3.5 h-3.5" />إضافة
@@ -693,13 +699,13 @@ function GroupsModal({ open, onClose, groups, members, techs, onChanged, flash }
                 <span className="text-[11px] text-subtext">المشرف:</span>
                 <select value={g.supervisor_id ?? ""} onChange={e => setSupervisor(g.id, e.target.value)} className="eg-select !py-1 !text-xs w-56">
                   <option value="">— بدون مشرف —</option>
-                  {techs.map(t => <option key={t.id} value={t.id}>{t.name} ({t.grade})</option>)}
+                  {techs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
               </div>
               <div>
                 <p className="text-[11px] text-subtext mb-1">الأعضاء ({mem.length})</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {techs.map(t => {
+                  {memberCandidates.map(t => {
                     const on = mem.some(m => m.tech_id === t.id);
                     return (
                       <button key={t.id} onClick={() => toggleMember(g.id, t.id, on)}
