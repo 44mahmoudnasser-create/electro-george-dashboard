@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users, Wrench, ClipboardList, FolderOpen, AlertTriangle,
   ShoppingCart, CalendarCheck, BarChart3, Scissors, Paintbrush,
-  Hammer, History, type LucideIcon,
+  Hammer, History, Cog, type LucideIcon,
 } from "lucide-react";
 
 export type NavItem = {
@@ -22,6 +22,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/work-orders",   label: "أوامر الشغل",       short: "أوامر",    icon: ClipboardList },
   { href: "/monitoring/sheet", label: "متابعة الصاج",   short: "الصاج",    icon: Scissors },
   { href: "/monitoring/paint", label: "متابعة الدهان",  short: "الدهان",   icon: Paintbrush },
+  { href: "/monitoring/assembly", label: "التجميع الميكانيكي", short: "التجميع", icon: Cog },
   { href: "/tools",         label: "الأدوات والعهد",    short: "الأدوات",  icon: Hammer },
   { href: "/productivity",  label: "الإنتاجية",         short: "الإنتاجية", icon: BarChart3 },
   { href: "/files",         label: "الملفات",           short: "الملفات",  icon: FolderOpen },
