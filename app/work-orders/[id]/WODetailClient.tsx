@@ -18,7 +18,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
   Save, Plus, X, Pencil, Trash2, Printer, Check, ClipboardList, FileText, ListOrdered, ListChecks, Layers,
   Lock, ChevronLeft, CheckCircle2, Circle, Send, BadgeCheck, Info, AlertTriangle,
-  BarChart3, Factory, Boxes, ShoppingCart, FolderOpen, type LucideIcon,
+  BarChart3, Factory, Boxes, ShoppingCart, FolderOpen, KeyRound, type LucideIcon,
 } from "lucide-react";
 import { today, cn } from "@/lib/utils";
 import { toneFor } from "@/lib/status";
@@ -102,7 +102,7 @@ const emptyBomDraft = (): BomDraft => ({ s_no: "", qty: "1", unit: "", descripti
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function WODetailClient({
-  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, initialItems, initialTotalBom, isDesign, currentUserName, departmentAliases, role, department,
+  wo, productivity, files, purchases, initialProdItems, initialBomItems, deptStatus, myDeptCode, initialItems, initialTotalBom, isDesign, currentUserName, currentUserEmail, departmentAliases, role, department,
 }: {
   wo: any; productivity: any[]; files: any[]; purchases: any[];
   initialProdItems: any[]; deptStatus: { item_id: number; department: string; status: string }[];
@@ -111,6 +111,7 @@ export default function WODetailClient({
   initialTotalBom: any[];
   isDesign: boolean;
   currentUserName: string;
+  currentUserEmail: string;
   departmentAliases: { code: string; aliases: string[] }[];
   initialBomItems: any[]; role: string; department: string | null;
 }) {
@@ -124,6 +125,29 @@ export default function WODetailClient({
   const isDesignOnly = isDesign && !isManager;
   // بيانات الأمر (الحالة، الأولوية، التسليم، شهر الخطة، العميل، المشروع، الوصف): المدير بس، ومكتب التصميم مايعدلهاش بعد الإنشاء
   const canEditOrder = isManager && !isDesign;
+
+  /* ─────────── حذف الأمر بكل اللي يخصه (المدير بس، بكلمة المرور) ─────────── */
+  const [delOpen, setDelOpen] = useState(false);
+  const [delPw, setDelPw] = useState("");
+  const [delBusy, setDelBusy] = useState(false);
+  const [delError, setDelError] = useState("");
+
+  const closeDelete = () => { if (delBusy) return; setDelOpen(false); setDelPw(""); setDelError(""); };
+
+  const deleteOrder = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (delBusy || !delPw) return;
+    if (!currentUserEmail) { setDelError("مش لاقي الإيميل بتاعك"); return; }
+    setDelBusy(true); setDelError("");
+    // نتأكد من كلمة المرور الأول، والدالة في الداتابيز بتتأكد إن المستخدم مدير
+    const { error: authErr } = await supabase.auth.signInWithPassword({ email: currentUserEmail, password: delPw });
+    if (authErr) { setDelBusy(false); setDelError("كلمة المرور غلط"); return; }
+    const { error } = await supabase.rpc("delete_work_order", { p_wo_id: wo.id });
+    if (error) { setDelBusy(false); setDelError(error.message); return; }
+    toast.success(`تم حذف أمر الشغل ${wo.wo_number}`);
+    router.push("/work-orders");
+    router.refresh();
+  };
 
   // تحويل أي قيمة قسم قديمة للـ code (زي resolve_department في الداتابيز)
   const resolveDeptCode = (raw: string | null | undefined) => {
@@ -609,12 +633,17 @@ export default function WODetailClient({
           {" · "}<span className="tabular-nums">{items.length}</span> بند
           {prodItems.length > 0 && <>{" · "}الإنجاز: <span className="tabular-nums text-text">{prodTotals.assembly}/{prodTotals.qty}</span> تجميع</>}
         </>}
-        actions={
+        actions={<>
+          {isManager && (
+            <button type="button" onClick={() => setDelOpen(true)} className="eg-btn-danger-soft eg-btn-sm">
+              <Trash2 className="size-3.5" />حذف الأمر
+            </button>
+          )}
           <button type="button" onClick={saveInfo} disabled={saving || !dirtyInfo || !canEditOrder} className="eg-btn-success eg-btn-sm">
             {saving ? <Spinner className="size-3.5" /> : <Save className="size-3.5" />}
             {saving ? "جاري الحفظ..." : "حفظ البيانات"}
           </button>
-        }
+        </>}
       />
 
       <PageBody>
@@ -1468,6 +1497,41 @@ export default function WODetailClient({
             </button>
           </form>
         )}
+      </Modal>
+      {/* ═══ حذف أمر الشغل ═══ */}
+      <Modal open={delOpen} onClose={closeDelete} size="sm"
+        title={<>حذف أمر الشغل <span className="font-mono">{wo.wo_number}</span></>}>
+        <form onSubmit={deleteOrder} className="space-y-4" noValidate>
+          <div className="flex items-start gap-3 rounded-lg border border-danger/25 bg-danger/[0.06] p-3">
+            <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" />
+            <div className="space-y-1.5 text-xs leading-5 text-subtext">
+              <p className="font-semibold text-danger">الحذف نهائي ومش هينفع يترجع.</p>
+              <p>هيتحذف الأمر وكل اللي يخصه:</p>
+              <ul className="list-inside list-disc space-y-0.5">
+                <li><span className="tabular-nums">{items.length}</span> بند</li>
+                <li>قائمة الإنتاج (<span className="tabular-nums">{prodItems.length}</span>) وسجلات الإنتاج</li>
+                <li>الـ BOM (<span className="tabular-nums">{bomItems.length}</span>) وسجل الصرف وإذون الصرف</li>
+                <li>Total BOM (<span className="tabular-nums">{totalBom.length}</span> سطر)</li>
+                <li>الملفات (<span className="tabular-nums">{files.length}</span>) والإنتاجية اليومية (<span className="tabular-nums">{productivity.length}</span>)</li>
+                <li>طلبات وأوامر الشراء المرتبطة بالأمر</li>
+                <li>حالات الأقسام وسجل الحالات</li>
+              </ul>
+              <p>سجل النشاط بيفضل محتفظ بنسخة من بيانات الأمر.</p>
+            </div>
+          </div>
+          <Field label="كلمة المرور" required hint="اكتب كلمة المرور بتاعتك للتأكيد">
+            <input type="password" autoComplete="current-password" value={delPw} autoFocus dir="ltr"
+              onChange={e => { setDelPw(e.target.value); setDelError(""); }} className="eg-input" />
+          </Field>
+          {delError && <p className="eg-error">{delError}</p>}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" onClick={closeDelete} disabled={delBusy} className="eg-btn-ghost">إلغاء</button>
+            <button type="submit" disabled={delBusy || !delPw} className="eg-btn-danger">
+              {delBusy ? <Spinner /> : <KeyRound className="size-4" />}
+              {delBusy ? "جاري الحذف..." : "تأكيد الحذف"}
+            </button>
+          </div>
+        </form>
       </Modal>
     </Page>
   );

@@ -67,6 +67,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
         deptStatus={(deptRows ?? []) as any[]}
         myDeptCode={myDeptCode}
         currentUserName={currentUserName}
+        currentUserEmail={me?.email ?? user.email ?? ""}
         initialItems={(itemRows ?? []) as any[]}
         initialTotalBom={(totalBomRows ?? []) as any[]}
         isDesign={myDeptCode === "DESIGN"}
