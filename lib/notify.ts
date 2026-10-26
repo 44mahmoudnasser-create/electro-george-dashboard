@@ -2,11 +2,6 @@ import { createClient } from "@supabase/supabase-js";
 import webpush from "web-push";
 import nodemailer from "nodemailer";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const unique = (arr: string[]) => arr.filter((v, i) => arr.indexOf(v) === i);
@@ -28,6 +23,11 @@ export async function notifyDepartment(input: NotifyInput) {
     process.env.VAPID_SUBJECT!,
     process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
     process.env.VAPID_PRIVATE_KEY!
+  );
+  // وبرضه الـ service role client، لنفس السبب
+  const supabaseAdmin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
   const { data: sender } = await supabaseAdmin

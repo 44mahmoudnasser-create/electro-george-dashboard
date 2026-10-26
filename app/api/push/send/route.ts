@@ -4,18 +4,6 @@ import { createSupabaseServerClient } from "@/lib/supabase-server";
 import webpush from "web-push";
 import nodemailer from "nodemailer";
 
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT!,
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!
-);
-
-// service role: بيقرا كل الاشتراكات والإيميلات بغض النظر عن RLS
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -26,6 +14,20 @@ export async function POST(request: Request) {
   const supabase = createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  // بنعمل الإعداد هنا مش فوق (زي lib/notify.ts)، عشان الـ build ما يفشلش
+  // لو المتغيرات مش موجودة في بيئة معينة (زي Preview على Vercel)
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT!,
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
+    process.env.VAPID_PRIVATE_KEY!
+  );
+
+  // service role: بيقرا كل الاشتراكات والإيميلات بغض النظر عن RLS
+  const supabaseAdmin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
 
   const { title, body, url } = await request.json();
 
