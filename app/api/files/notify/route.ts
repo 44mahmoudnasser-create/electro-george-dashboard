@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   // بنقرا الملف بصلاحيات اليوزر (RLS)، فمحدش يقدر يطلب إيميل عن ملف مش من قسمه
   const { data: file } = await supabase
     .from("files")
-    .select("id, file_name, file_type, receive_date, delivery_date, work_order:work_orders(wo_number), supervisor:technicians(name)")
+    .select("id, file_name, file_type, receive_date, delivery_date, work_order:work_orders(wo_number), item:work_order_items(item_no, description), supervisor:technicians(name)")
     .eq("id", fileId)
     .maybeSingle();
   if (!file) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -28,6 +28,8 @@ export async function POST(request: Request) {
     { label: "أمر الشغل", value: woNumber ?? "بدون أمر شغل" },
     { label: "اسم الملف", value: f.file_name },
   ];
+  const item = Array.isArray(f.item) ? f.item[0] : f.item;
+  if (item) details.splice(1, 0, { label: "البند", value: `#${item.item_no} ${item.description}` });
   if (f.file_type) details.push({ label: "نوع الملف", value: f.file_type });
   if (event === "received") {
     details.push({ label: "تاريخ الاستلام", value: f.receive_date ?? "—" });

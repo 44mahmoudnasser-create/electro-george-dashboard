@@ -931,10 +931,11 @@ export default function WODetailClient({
           {/* ═══ الملفات ═══ */}
           {tab === "files" && (
             <DataTable empty="لا توجد ملفات" icon={FolderOpen}
-              head={["الملف", "النوع", "تاريخ الاستلام", "سُلِّم لـ", "تاريخ التسليم"]}
-              numeric={[2, 4]}
+              head={["الملف", "البند", "النوع", "تاريخ الاستلام", "سُلِّم لـ", "تاريخ التسليم"]}
+              numeric={[3, 5]}
               rows={files.map(f => [
                 f.file_name,
+                f.item ? `#${f.item.item_no} ${f.item.description}` : "—",
                 f.file_type ? <Badge label={f.file_type} dot={false} /> : "—",
                 f.receive_date ?? "—",
                 f.supervisor_name ?? "—",

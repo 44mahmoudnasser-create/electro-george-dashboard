@@ -31,7 +31,7 @@ export default async function WODetailPage({ params }: { params: { id: string } 
       .eq("wo_id", woId)
       .order("work_date", { ascending: false }),
     supabase.from("files")
-      .select("file_name, file_type, receive_date, delivery_date, technicians(name)")
+      .select("file_name, file_type, receive_date, delivery_date, technicians(name), item:work_order_items(item_no, description)")
       .eq("wo_id", woId),
     supabase.from("purchases")
       .select("item_name, qty, request_date, supply_date, status, image_path")

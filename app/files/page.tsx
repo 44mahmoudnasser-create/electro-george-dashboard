@@ -12,13 +12,16 @@ export default async function FilesPage() {
   const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
   const role = appUser?.role ?? "secretary";
 
-  const [{ data: files }, { data: wos }, { data: supervisors }] = await Promise.all([
+  const [{ data: files }, { data: wos }, { data: items }, { data: supervisors }] = await Promise.all([
     supabase.from("files").select(`
       *,
       work_order:work_orders(wo_number),
+      item:work_order_items(item_no, description),
       supervisor:technicians(name)
     `).order("id", { ascending: false }),
     supabase.from("work_orders").select("id, wo_number").order("id", { ascending: false }),
+    // الملف بيتسجل على بند من بنود الأمر (migration 025)
+    supabase.from("work_order_items").select("id, wo_id, item_no, description").order("item_no"),
     supabase.from("technicians").select("id, name").eq("grade", "مشرف").order("name"),
   ]);
 
@@ -27,6 +30,7 @@ export default async function FilesPage() {
       <FilesClient
         initialFiles={files ?? []}
         wos={wos ?? []}
+        items={items ?? []}
         supervisors={supervisors ?? []}
         role={role}
       />
