@@ -1,6 +1,10 @@
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { OVERTIME_TEMPLATE_B64 } from "./overtime-template";
+import { deptLabel } from "./roles";
+
+// اسم القسم بالعربي بدل الكود (ASSEMBLY → التجميع الميكانيكي، SHEET → الصاج)؛ عمود الكشف اسمه "القسم" فبنشيل كلمة "قسم"
+const deptName = (dept: string) => deptLabel(dept).replace(/^قسم\s+/, "");
 
 export type OvertimeFormRow = { name: string; route: string | null; dept: string | null };
 
@@ -30,7 +34,7 @@ export async function buildOvertimeForm(date: string, people: OvertimeFormRow[])
       no: i + 1,
       name: p?.name ?? "",
       route: p?.route ?? "",
-      dept: p?.dept ?? "",
+      dept: p?.dept ? deptName(p.dept) : "",
     };
   });
 

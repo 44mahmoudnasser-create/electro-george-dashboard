@@ -9,7 +9,8 @@ export const ROLE_LABEL: Record<string, string> = {
 export const DEPT_LABEL: Record<string, string> = {
   SHEET: "قسم الصاج",
   PAINT: "قسم الدهان",
-  ASSEMBLY: "قسم التجميع",
+  // "assembly" في الداتابيز اسم قديم لقسم التجميع الميكانيكي (009_departments_aliases)
+  ASSEMBLY: "التجميع الميكانيكي",
   ELEC_ASSEMBLY: "التجميع الكهربي",
   MECH_ASSEMBLY: "التجميع الميكانيكي",
   DESIGN: "مكتب التصميم",
