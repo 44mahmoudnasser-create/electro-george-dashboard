@@ -1,24 +1,45 @@
 "use client";
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Badge from "@/components/ui/Badge";
-import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { AlertTriangle, RotateCcw, ChevronLeft, PackageCheck } from "lucide-react";
+import Spinner from "@/components/ui/Spinner";
+import { Page, PageHeader, PageBody, SectionHeader } from "@/components/ui/Page";
+import { StatCard, ProgressBar } from "@/components/ui/StatCard";
+import { Segmented } from "@/components/ui/Tabs";
+import { FilterChip, ChipRow } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { PRIORITY_RANK, TONE_TEXT, toneFor, type Tone } from "@/lib/status";
+import {
+  LayoutDashboard, Target, PackageCheck, Activity, CalendarClock, RotateCcw, ChevronLeft,
+  AlertTriangle, CheckCircle2, BellRing, CalendarCheck, ShoppingCart,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ═══════════════ ثوابت ═══════════════ */
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
 const DONE = ["مكتمل", "تم التسليم"];
-const RANK: Record<string, number> = { "عاجلة": 0, "عالية": 1, "متوسطة": 2, "منخفضة": 3 };
-const PRIORITY_STYLE: Record<string, string> = {
-  "عاجلة": "bg-danger/15 text-danger",
-  "عالية": "bg-warning/15 text-warning",
-  "متوسطة": "bg-accent/15 text-accent",
-  "منخفضة": "bg-card2 text-subtext",
+
+// لون كل حالة كخلفية (نقطة الكارت وشريط التوزيع) — نفس ألوان الشارات في lib/status
+const TONE_BG: Record<Tone, string> = {
+  neutral: "bg-subtext/60",
+  accent: "bg-accent",
+  success: "bg-success",
+  warning: "bg-warning",
+  danger: "bg-danger",
+  violet: "bg-accent2",
 };
+
+// شكل كل نوع تنبيه في "تحتاج قرار"
+const ALERT_STYLE = {
+  danger: { icon: AlertTriangle, box: "bg-danger/10 text-danger" },
+  warning: { icon: AlertTriangle, box: "bg-warning/10 text-warning" },
+  ok: { icon: CheckCircle2, box: "bg-success/10 text-success" },
+} as const;
 
 type ItemRow = {
   id: number; wo_id: number; item_no: number; description: string | null; qty: number | null;
@@ -62,6 +83,8 @@ export default function DashboardClient({
   violationsThisMonth: number; today: string; thisMonth: string; role: string;
 }) {
   const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
   const canChange = role === "manager";
 
   const [view, setView] = useState<"items" | "orders">("items");
@@ -70,13 +93,8 @@ export default function DashboardClient({
   const [statusFilter, setStatusFilter] = useState<string>("الكل");
   const [list, setList] = useState<ItemRow[]>(items);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
-  const [undoTarget, setUndoTarget] = useState<Row | null>(null);
 
-  const flash = (ok: boolean, text: string) => {
-    setNotice({ ok, text });
-    setTimeout(() => setNotice(null), 3000);
-  };
+  const flash = (ok: boolean, text: string) => toast.show(ok, text);
 
   const monthLabel = useMemo(() => {
     const [y, m] = month.split("-").map(Number);
@@ -114,7 +132,7 @@ export default function DashboardClient({
     });
     return Array.from(byWo.entries()).map(([woId, bs]) => {
       const wo = bs[0].work_order;
-      const sorted = [...bs].sort((a, b) => (RANK[a.priority] ?? 2) - (RANK[b.priority] ?? 2));
+      const sorted = [...bs].sort((a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2));
       const dates = bs.map(b => b.expected_delivery).filter(Boolean) as string[];
       return {
         key: `w${woId}`,
@@ -159,6 +177,9 @@ export default function DashboardClient({
     return c;
   }, [rows]);
 
+  // مجموع الحالات الخمسة (أساس شريط التوزيع)
+  const statusTotal = STATUSES.reduce((sum, s) => sum + (allCounts[s] ?? 0), 0);
+
   const overallLate = useMemo(() => rows.filter(isLate).length, [rows, today]);
 
   const tableRows = useMemo(() => base
@@ -166,7 +187,7 @@ export default function DashboardClient({
     .sort((a, b) => {
       const rank = (r: Row) => (isLate(r) ? 0 : DONE.includes(r.status) ? 2 : 1);
       if (rank(a) !== rank(b)) return rank(a) - rank(b);
-      return (RANK[a.priority] ?? 2) - (RANK[b.priority] ?? 2);
+      return (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2);
     }), [base, statusFilter, today]);
 
   /* ═══════════════ تنبيهات تحتاج قرار ═══════════════ */
@@ -208,255 +229,287 @@ export default function DashboardClient({
     if (await setJob(r.itemId, "تم التسليم")) flash(true, `تم تسليم ${r.label}`);
   };
 
-  const confirmUndo = async () => {
-    if (!undoTarget || undoTarget.itemId == null) return;
+  const undoDelivery = async (r: Row) => {
+    if (r.itemId == null) return;
+    const ok = await confirm({
+      title: "إلغاء التسليم",
+      message: (
+        <div className="space-y-2.5">
+          <div className="space-y-0.5 rounded-lg border border-border/60 bg-card2/60 px-3 py-2 text-xs leading-5">
+            <p className="font-mono font-semibold text-text">{r.label}</p>
+            {r.sub && <p className="text-subtext">{r.sub}</p>}
+          </div>
+          <p>هيرجع للحالة <span className="font-semibold text-text">مكتمل</span>.</p>
+        </div>
+      ),
+      confirmText: "تأكيد الإلغاء",
+      cancelText: "تراجع",
+      tone: "danger",
+    });
+    if (!ok) return;
     // الإلغاء بيرجّع البند لـ "مكتمل"
-    if (await setJob(undoTarget.itemId, "مكتمل")) flash(true, `تم إلغاء تسليم ${undoTarget.label}`);
-    setUndoTarget(null);
+    if (await setJob(r.itemId, "مكتمل")) flash(true, `تم إلغاء تسليم ${r.label}`);
   };
 
-  return (
-    <div className="max-w-6xl mx-auto">
-      {/* ═══ الهيدر ═══ */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h1 className="text-lg font-bold text-text">لوحة المصنع</h1>
-            <p className="text-[11px] text-subtext">{todayLabel}</p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded-md border border-border overflow-hidden">
-              {([["items", "البنود"], ["orders", "الأوامر"]] as const).map(([k, label]) => (
-                <button key={k} onClick={() => { setView(k); setStatusFilter("الكل"); }}
-                  className={cn("px-3 py-1.5 text-xs transition-colors",
-                    view === k ? "bg-accent/15 text-accent font-semibold" : "text-subtext hover:text-text")}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <input type="month" value={month} onChange={e => setMonth(e.target.value)}
-              className="eg-input !py-1.5 !text-xs w-40" />
-            {month !== thisMonth && (
-              <button onClick={() => setMonth(thisMonth)} className="text-xs text-accent hover:underline">الشهر الحالي</button>
-            )}
-          </div>
-        </div>
-      </div>
+  // عمود الإجراء بيظهر بس لما يكون فيه إجراء ممكن (المدير في وضع البنود)
+  const showActions = view === "items" && canChange;
+  const allLabel = view === "items" ? "كل البنود" : "كل الأوامر";
 
-      <div className="p-4 md:p-6 space-y-5">
-        {notice && (
-          <div className={cn("text-xs px-3 py-2 rounded-lg border",
-            notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
-            {notice.text}
-          </div>
-        )}
+  return (
+    <Page width="6xl">
+      <PageHeader
+        title="لوحة المصنع"
+        icon={LayoutDashboard}
+        subtitle={todayLabel}
+        actions={<>
+          <Segmented
+            value={view}
+            onChange={v => { setView(v); setStatusFilter("الكل"); }}
+            ariaLabel="طريقة العرض"
+            items={[{ value: "items", label: "البنود" }, { value: "orders", label: "الأوامر" }]}
+          />
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)}
+            aria-label="شهر الخطة" className="eg-input eg-input-sm w-40" />
+          {month !== thisMonth && (
+            <button onClick={() => setMonth(thisMonth)} className="eg-btn-subtle eg-btn-sm text-accent">
+              الشهر الحالي
+            </button>
+          )}
+        </>}
+      />
+
+      <PageBody>
+        {/* ═══ الخطة الشهرية ═══ */}
+        <section aria-label={`خطة ${monthLabel}`} className="eg-stagger grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label={`مخطط لـ ${monthLabel}`} value={kpi.total} icon={Target} />
+          <StatCard
+            label="تم تسليمه"
+            value={<>{kpi.delivered}<span className="ms-1.5 text-sm font-medium text-subtext">/ {kpi.total}</span></>}
+            tone="success"
+            icon={PackageCheck}
+            hint={`نسبة التسليم من خطة ${monthLabel}`}
+            sub={<>
+              <ProgressBar value={progressPct} tone="success" label={`نسبة التسليم من خطة ${monthLabel}`} className="mb-1 mt-2" />
+              <span className="tabular-nums">{progressPct}% من الخطة</span>
+            </>}
+          />
+          <StatCard label="جاري الآن" value={kpi.inProgress} tone="accent" icon={Activity} />
+          <StatCard label="متأخر" value={kpi.late} tone={kpi.late ? "danger" : "muted"} icon={CalendarClock} />
+        </section>
 
         {/* ═══ كل البنود / الأوامر حسب الحالة ═══ */}
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold text-subtext">{view === "items" ? "كل البنود" : "كل الأوامر"}</h2>
-            {overallLate > 0 && <span className="text-[11px] text-danger">{overallLate} متأخر</span>}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            {STATUSES.map(st => {
+        <section className="space-y-3">
+          <SectionHeader
+            title={allLabel}
+            description="اضغط على أي حالة علشان تعرضها في الجدول."
+            actions={overallLate > 0 ? <Badge tone="danger" label={`${overallLate} متأخر`} /> : undefined}
+          />
+          {statusTotal > 0 && (
+            <div
+              role="img"
+              aria-label={STATUSES.map(s => `${s} ${allCounts[s] ?? 0}`).join("، ")}
+              className="flex h-2 w-full gap-0.5 overflow-hidden rounded-full"
+            >
+              {STATUSES.map(s => {
+                const n = allCounts[s] ?? 0;
+                if (!n) return null;
+                return (
+                  <span key={s} title={`${s}: ${n}`}
+                    className={cn("h-full min-w-[3px] transition-[width] duration-500 ease-out", TONE_BG[toneFor(s)])}
+                    style={{ width: `${(n / statusTotal) * 100}%` }} />
+                );
+              })}
+            </div>
+          )}
+          <div className="eg-stagger grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {STATUSES.map((st, i) => {
               const n = allCounts[st] ?? 0;
               const warn = st === "متوقف" && n > 0;
+              const active = scope === "all" && statusFilter === st;
               return (
-                <button key={st} onClick={() => { setScope("all"); setStatusFilter(st); }}
-                  className={cn("eg-card !p-3 text-right transition-colors hover:border-accent/40", warn && "!border-warning/50")}>
-                  <div className={cn("text-xl font-bold tabular-nums", warn ? "text-warning" : "text-text")}>{n}</div>
-                  <div className="text-[11px] text-subtext">{st}</div>
-                </button>
+                <StatCard
+                  key={st}
+                  label={
+                    <span className="inline-flex items-center gap-1.5">
+                      <span aria-hidden className={cn("size-2 shrink-0 rounded-full", TONE_BG[toneFor(st)])} />
+                      {st}
+                    </span>
+                  }
+                  value={n}
+                  tone={warn ? "warning" : "default"}
+                  onClick={() => { setScope("all"); setStatusFilter(st); }}
+                  active={active}
+                  className={cn(warn && !active && "!border-warning/40", i === STATUSES.length - 1 && "col-span-2 sm:col-span-1")}
+                />
               );
             })}
           </div>
         </section>
 
-        {/* ═══ الخطة الشهرية ═══ */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Kpi label={`مخطط لـ ${monthLabel}`} value={kpi.total} />
-          <Kpi label="تم تسليمه" value={kpi.delivered} tone="success" sub={`${progressPct}% من الخطة`} />
-          <Kpi label="جاري الآن" value={kpi.inProgress} tone="accent" />
-          <Kpi label="متأخر" value={kpi.late} tone={kpi.late ? "danger" : "muted"} />
-        </div>
-        <div className="eg-card !p-4">
-          <div className="flex items-center justify-between text-xs mb-2">
-            <span className="text-subtext">نسبة التسليم من خطة {monthLabel}</span>
-            <span className="font-bold text-text tabular-nums">{kpi.delivered} / {kpi.total}</span>
-          </div>
-          <div className="h-2 rounded-full bg-card2 overflow-hidden">
-            <div className="h-full bg-success transition-all" style={{ width: `${progressPct}%` }} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           {/* ═══ الجدول ═══ */}
-          <div className="lg:col-span-2 space-y-3">
-            <div className="flex items-center gap-2">
-              {([["plan", `خطة ${monthLabel}`], ["all", view === "items" ? "كل البنود" : "كل الأوامر"]] as const).map(([k, label]) => (
-                <button key={k} onClick={() => { setScope(k); setStatusFilter("الكل"); }}
-                  className={cn("px-3 py-1.5 rounded-md text-xs transition-colors",
-                    scope === k ? "bg-accent/15 text-accent font-semibold" : "text-subtext hover:text-text")}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {[{ key: "الكل", n: base.length }, ...STATUSES.map(s => ({ key: s, n: statusCounts[s] ?? 0 }))].map(({ key, n }) => (
-                <button key={key} onClick={() => setStatusFilter(key)}
-                  className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap border transition-colors",
-                    statusFilter === key ? "bg-accent/15 border-accent/60 text-accent font-semibold"
-                      : "bg-card2 border-border text-subtext hover:text-text")}>
-                  {key}<span className="tabular-nums opacity-70">{n}</span>
-                </button>
-              ))}
+          <section className="eg-card overflow-hidden !p-0 lg:col-span-2">
+            <div className="space-y-3 border-b border-border/60 px-4 pb-3 pt-4">
+              <Segmented
+                value={scope}
+                onChange={k => { setScope(k); setStatusFilter("الكل"); }}
+                ariaLabel="نطاق الجدول"
+                items={[{ value: "plan", label: `خطة ${monthLabel}` }, { value: "all", label: allLabel }]}
+              />
+              <ChipRow>
+                <FilterChip active={statusFilter === "الكل"} onClick={() => setStatusFilter("الكل")} count={base.length}>الكل</FilterChip>
+                {STATUSES.map(s => (
+                  <FilterChip key={s} active={statusFilter === s} onClick={() => setStatusFilter(s)} count={statusCounts[s] ?? 0}>{s}</FilterChip>
+                ))}
+              </ChipRow>
             </div>
 
-            <div className="eg-card !p-0 overflow-hidden">
-              {tableRows.length ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs border-collapse min-w-[560px]">
-                    <thead>
-                      <tr className="bg-card2 text-subtext">
-                        <th className="px-4 py-2 text-right font-semibold">{view === "items" ? "البند" : "الأمر"}</th>
-                        <th className="px-3 py-2 text-right font-semibold">الحالة</th>
-                        <th className="px-3 py-2 text-right font-semibold">الأولوية</th>
-                        <th className="px-3 py-2 text-right font-semibold">التسليم المتوقع</th>
-                        <th className="px-3 py-2 text-left font-semibold w-36">إجراء</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tableRows.map(r => {
-                        const late = isLate(r);
-                        const done = r.status === "تم التسليم";
-                        const busy = r.itemId != null && busyId === r.itemId;
-                        return (
-                          <tr key={r.key} className="border-t border-border/40 hover:bg-card2/50">
-                            <td className="px-4 py-2 cursor-pointer" onClick={() => router.push(`/work-orders/${r.woId}`)}>
-                              <span className="font-mono font-semibold text-accent">{r.label}</span>
-                              {r.sub && <div className="text-[11px] text-subtext truncate max-w-[280px]">{r.sub}</div>}
-                            </td>
-                            <td className="px-3 py-2"><Badge label={r.status} /></td>
-                            <td className="px-3 py-2">
-                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded", PRIORITY_STYLE[r.priority] ?? PRIORITY_STYLE["منخفضة"])}>{r.priority}</span>
-                            </td>
-                            <td className={cn("px-3 py-2 tabular-nums", late ? "text-danger font-semibold" : "text-subtext")}>
-                              {r.expected ?? "—"}{late && <span className="mr-1 text-[10px]">· متأخر</span>}
-                            </td>
-                            <td className="px-3 py-2 text-left">
+            {tableRows.length ? (
+              <div className="overflow-x-auto">
+                <table className="eg-table min-w-[600px]">
+                  <thead>
+                    <tr>
+                      <th>{view === "items" ? "البند" : "الأمر"}</th>
+                      <th>الحالة</th>
+                      <th>الأولوية</th>
+                      <th>التسليم المتوقع</th>
+                      {showActions && <th className="w-32 text-end">إجراء</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableRows.map(r => {
+                      const late = isLate(r);
+                      const done = r.status === "تم التسليم";
+                      const busy = r.itemId != null && busyId === r.itemId;
+                      const href = `/work-orders/${r.woId}`;
+                      return (
+                        <tr key={r.key}>
+                          <td className="cursor-pointer" onClick={() => router.push(href)}>
+                            <Link href={href} onClick={e => e.stopPropagation()}
+                              className="font-mono text-[13px] font-semibold text-accent underline-offset-4 hover:underline">
+                              {r.label}
+                            </Link>
+                            {r.sub && <div className="max-w-[280px] truncate text-[11px] text-subtext">{r.sub}</div>}
+                          </td>
+                          <td><Badge label={r.status} /></td>
+                          <td>{r.priority ? <Badge label={r.priority} dot={false} /> : <span className="text-muted">—</span>}</td>
+                          <td className={cn("tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
+                            {r.expected ?? "—"}
+                            {late && <span className="ms-1.5 rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium">متأخر</span>}
+                          </td>
+                          {showActions && (
+                            <td className="text-end">
                               {view === "items" && canChange && r.itemId != null ? (
                                 done ? (
-                                  <button onClick={() => setUndoTarget(r)} disabled={busy}
-                                    className="inline-flex items-center gap-1 text-warning hover:underline disabled:opacity-40">
-                                    <RotateCcw className="w-3.5 h-3.5" />إلغاء التسليم
+                                  <button onClick={() => undoDelivery(r)} disabled={busy} className="eg-btn-danger-soft eg-btn-xs">
+                                    {busy ? <Spinner className="size-3.5" /> : <RotateCcw className="size-3.5" />}إلغاء التسليم
                                   </button>
                                 ) : r.status === "مكتمل" ? (
-                                  <button onClick={() => deliver(r)} disabled={busy}
-                                    className="inline-flex items-center gap-1 text-success hover:underline disabled:opacity-40">
-                                    <PackageCheck className="w-3.5 h-3.5" />تسليم
+                                  <button onClick={() => deliver(r)} disabled={busy} className="eg-btn-success eg-btn-xs">
+                                    {busy ? <Spinner className="size-3.5" /> : <PackageCheck className="size-3.5" />}تسليم
                                   </button>
-                                ) : <span className="text-subtext">—</span>
-                              ) : <span className="text-subtext">—</span>}
+                                ) : <span className="text-muted">—</span>
+                              ) : <span className="text-muted">—</span>}
                             </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : <EmptyState message={base.length ? "لا توجد عناصر بهذه الحالة" : scope === "plan" ? `مفيش ${unit === "بند" ? "بنود" : "أوامر"} مخططة لـ ${monthLabel}` : "مفيش بيانات"} />}
-            </div>
-          </div>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState
+                message={base.length ? "لا توجد عناصر بهذه الحالة" : scope === "plan" ? `مفيش ${unit === "بند" ? "بنود" : "أوامر"} مخططة لـ ${monthLabel}` : "مفيش بيانات"}
+                description={!base.length && scope === "plan" && rows.length > 0 ? `اختار شهر تاني من فوق، أو اعرض ${allLabel}.` : undefined}
+                action={base.length > 0
+                  ? <button onClick={() => setStatusFilter("الكل")} className="eg-btn-ghost eg-btn-sm">مسح الفلتر</button>
+                  : scope === "plan" && rows.length > 0
+                    ? <button onClick={() => { setScope("all"); setStatusFilter("الكل"); }} className="eg-btn-ghost eg-btn-sm">عرض {allLabel}</button>
+                    : undefined}
+              />
+            )}
+          </section>
 
           {/* ═══ الجانب ═══ */}
-          <div className="space-y-4">
-            <div className="eg-card !p-4 space-y-3">
-              <h2 className="text-sm font-bold text-text flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-warning" />تحتاج قرار
-              </h2>
-              <ul className="space-y-2">
-                {alerts.map((a, i) => (
-                  <li key={i} className="flex items-start justify-between gap-2 text-xs">
-                    <span className={cn(a.tone === "danger" ? "text-danger" : a.tone === "warning" ? "text-warning" : "text-success")}>{a.text}</span>
-                    {a.href && (
-                      <button onClick={() => router.push(a.href!)} className="text-subtext hover:text-accent shrink-0">
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-                    )}
-                  </li>
-                ))}
+          <aside className="space-y-4">
+            <section className="eg-card !p-4">
+              <SectionHeader title="تحتاج قرار" icon={BellRing} />
+              <ul className="-mx-1.5 mt-2 space-y-0.5">
+                {alerts.map((a, i) => {
+                  const s = ALERT_STYLE[a.tone];
+                  const Icon = s.icon;
+                  const body = (
+                    <>
+                      <span className={cn("grid size-7 shrink-0 place-items-center rounded-md", s.box)}>
+                        <Icon className="size-3.5" />
+                      </span>
+                      <span className={cn("min-w-0 flex-1 text-xs leading-5", a.tone === "ok" ? "text-subtext" : "text-text")}>
+                        {a.text}
+                      </span>
+                    </>
+                  );
+                  return (
+                    <li key={i}>
+                      {a.href ? (
+                        <Link href={a.href}
+                          className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-card2">
+                          {body}
+                          <ChevronLeft className="size-4 shrink-0 text-muted transition-[color,transform] duration-150 group-hover:-translate-x-0.5 group-hover:text-accent" />
+                        </Link>
+                      ) : (
+                        <div className="flex items-center gap-2.5 px-1.5 py-1.5">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
-            </div>
+            </section>
 
-            <div className="eg-card !p-4 space-y-3">
-              <h2 className="text-sm font-bold text-text">حضور اليوم</h2>
-              <div className="grid grid-cols-4 gap-2 text-center">
-                <Mini label="حاضر" value={att.present} tone="success" />
-                <Mini label="غياب" value={att.absent} tone="danger" />
-                <Mini label="مأمورية" value={att.mission} tone="accent" />
-                <Mini label="إجازة" value={att.leave} tone="warning" />
+            <section className="eg-card space-y-3 !p-4">
+              <SectionHeader
+                title="حضور اليوم"
+                icon={CalendarCheck}
+                actions={
+                  <Link href="/attendance" className="eg-link inline-flex items-center gap-0.5 text-xs">
+                    تفاصيل الحضور<ChevronLeft className="size-3.5" />
+                  </Link>
+                }
+              />
+              <div className="grid grid-cols-4 gap-2">
+                <MiniStat label="حاضر" value={att.present} tone="success" />
+                <MiniStat label="غياب" value={att.absent} tone="danger" />
+                <MiniStat label="مأمورية" value={att.mission} tone="accent" />
+                <MiniStat label="إجازة" value={att.leave} tone="warning" />
               </div>
-              <button onClick={() => router.push("/attendance")} className="text-xs text-accent hover:underline">تفاصيل الحضور ←</button>
-            </div>
+            </section>
 
-            <button onClick={() => router.push("/purchases")}
-              className="eg-card !p-4 w-full text-right flex items-center justify-between hover:border-accent/40 transition-colors">
-              <div>
-                <p className="text-xs text-subtext">طلبات الشراء المفتوحة</p>
-                <p className="text-xl font-bold text-text tabular-nums">{openPurchases}</p>
-              </div>
-              <ChevronLeft className="w-4 h-4 text-subtext" />
-            </button>
-          </div>
+            <Link href="/purchases"
+              className="eg-card group flex items-center gap-3 !p-4 transition-colors hover:border-border-strong hover:bg-card2/40">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border/60 bg-card2 text-subtext transition-colors group-hover:text-accent">
+                <ShoppingCart className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs text-subtext">طلبات الشراء المفتوحة</span>
+                <span className="block text-xl font-bold leading-7 tabular-nums text-text">{openPurchases}</span>
+              </span>
+              <ChevronLeft className="size-4 shrink-0 text-muted transition-[color,transform] duration-150 group-hover:-translate-x-0.5 group-hover:text-accent" />
+            </Link>
+          </aside>
         </div>
-      </div>
-
-      {/* ═══ تأكيد إلغاء التسليم ═══ */}
-      <Modal open={!!undoTarget} onClose={() => setUndoTarget(null)} title="إلغاء التسليم" size="sm">
-        {undoTarget && (
-          <div className="space-y-4">
-            <div className="bg-card2 rounded-lg p-3 text-xs space-y-1">
-              <p className="text-text font-semibold font-mono">{undoTarget.label}</p>
-              {undoTarget.sub && <p className="text-subtext">{undoTarget.sub}</p>}
-              <p className="text-subtext">هيرجع للحالة <span className="text-text">مكتمل</span>.</p>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setUndoTarget(null)} className="eg-btn-ghost flex-1 justify-center">تراجع</button>
-              <button onClick={confirmUndo} disabled={busyId !== null} className="eg-btn-danger flex-1 justify-center">
-                تأكيد الإلغاء
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-    </div>
+      </PageBody>
+    </Page>
   );
 }
 
 /* ═══════════════ مكونات صغيرة ═══════════════ */
 
-const TONES: Record<string, string> = {
-  success: "text-success", danger: "text-danger", warning: "text-warning",
-  accent: "text-accent", muted: "text-subtext", default: "text-text",
-};
-
-function Kpi({ label, value, sub, tone = "default" }: {
-  label: string; value: number; sub?: string; tone?: keyof typeof TONES;
-}) {
+// رقم صغير في كارت حضور اليوم (بيبهت لو صفر)
+function MiniStat({ label, value, tone }: { label: string; value: number; tone: keyof typeof TONE_TEXT }) {
   return (
-    <div className="eg-card !p-4">
-      <div className={cn("text-2xl font-bold tabular-nums", TONES[tone])}>{value}</div>
-      <div className="text-[11px] text-subtext mt-0.5">{label}</div>
-      {sub && <div className="text-[10px] text-subtext/80 mt-1">{sub}</div>}
-    </div>
-  );
-}
-
-function Mini({ label, value, tone }: { label: string; value: number; tone: keyof typeof TONES }) {
-  return (
-    <div className="bg-card2 rounded-lg py-2">
-      <div className={cn("text-lg font-bold tabular-nums", TONES[tone])}>{value}</div>
-      <div className="text-[10px] text-subtext">{label}</div>
+    <div className="rounded-lg border border-border/60 bg-card2/50 px-1 py-2 text-center">
+      <div className={cn("text-lg font-bold leading-7 tabular-nums", value ? TONE_TEXT[tone] : "text-subtext")}>{value}</div>
+      <div className="text-[11px] leading-4 text-subtext">{label}</div>
     </div>
   );
 }

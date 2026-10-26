@@ -1,5 +1,12 @@
-export default function Spinner({ className = "w-6 h-6" }: { className?: string }) {
+import { cn } from "@/lib/utils";
+
+// مؤشر تحميل دائري — بياخد لون النص اللي حواليه (يتحط جوه الأزرار عادي)
+export default function Spinner({ className = "size-4" }: { className?: string }) {
   return (
-    <div className={`${className} border-2 border-border border-t-accent rounded-full animate-spin`} />
+    <span
+      role="status"
+      aria-label="جاري التحميل"
+      className={cn("inline-block shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent opacity-80", className)}
+    />
   );
 }

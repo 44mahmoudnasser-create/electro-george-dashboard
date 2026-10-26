@@ -1,11 +1,17 @@
 "use client";
 import { Fragment, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { cn } from "@/lib/utils";
+import { downloadCustodyReceipt } from "@/lib/custody-receipt";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { downloadCustodyReceipt } from "@/lib/custody-receipt";
-import { Plus, Printer, ChevronDown, ChevronUp } from "lucide-react";
-import { cn } from "@/lib/utils";
+import Badge from "@/components/ui/Badge";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { StatPill } from "@/components/ui/StatCard";
+import { useToast } from "@/components/ui/Toast";
+import { Plus, Printer, ChevronDown, Check, PackageOpen } from "lucide-react";
 
 export type CustodyEvent = { event: string; qty: number; note: string | null; created_at: string };
 export type CustodyRow = {
@@ -31,13 +37,16 @@ const EVENT_LABEL: Record<EventKind, string> = {
   "تلف": "تالف",
   "فقد": "مفقود",
 };
-const STATUS_STYLE: Record<string, string> = {
-  "مستلمة": "bg-accent/15 text-accent",
-  "مرتجعة": "bg-success/15 text-success",
-  "مستهلكة": "bg-card2 text-subtext",
-  "تالفة": "bg-warning/15 text-warning",
-  "مفقودة": "bg-danger/15 text-danger",
+// لون النقطة لكل حركة في سجل الحركات
+const EVENT_DOT: Record<string, string> = {
+  "صرف": "bg-accent",
+  "استهلاك": "bg-subtext",
+  "ارتجاع": "bg-success",
+  "تلف": "bg-warning",
+  "فقد": "bg-danger",
 };
+
+const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
 
 export default function CustodyPanel({
   techId, techName, techDept, role, custody, tools, availableItems,
@@ -50,19 +59,16 @@ export default function CustodyPanel({
   tools: ToolLite[];
   availableItems: ItemLite[];
 }) {
+  const toast = useToast();
   const canManage = role === "admin" || role === "manager";
 
   const [rows, setRows] = useState<CustodyRow[]>(custody);
   const [items, setItems] = useState<ItemLite[]>(availableItems);
   const [showClosed, setShowClosed] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [printing, setPrinting] = useState(false);
 
-  const flash = (ok: boolean, text: string) => {
-    setNotice({ ok, text });
-    setTimeout(() => setNotice(null), 3500);
-  };
+  const flash = (ok: boolean, text: string) => toast.show(ok, text);
 
   const open = useMemo(() => rows.filter(r => r.open_qty > 0), [rows]);
   const closed = useMemo(() => rows.filter(r => r.open_qty <= 0), [rows]);
@@ -72,6 +78,8 @@ export default function CustodyPanel({
     () => tools.filter(t => !t.department || t.department === techDept),
     [tools, techDept]
   );
+
+  const toggleExpanded = (id: number) => setExpanded(expanded === id ? null : id);
 
   /* ─────────── صرف عهدة ─────────── */
   const [issueOpen, setIssueOpen] = useState(false);
@@ -96,7 +104,9 @@ export default function CustodyPanel({
   const toggleSerial = (id: number) =>
     setIssueSerials(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
-  const submitIssue = async () => {
+  const submitIssue = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (issueBusy) return;
     if (!issueTool) { setIssueError("اختار الأداة"); return; }
     setIssueBusy(true); setIssueError("");
     const isConsumable = issueTool.is_consumable;
@@ -120,7 +130,7 @@ export default function CustodyPanel({
       setItems(prev => prev.map(i => issueSerials.includes(i.id) ? { ...i, status: "مع فني" } : i));
     }
     setIssueOpen(false);
-    flash(true, `تم صرف ${data} ${isConsumable ? "" : "قطعة"} من ${issueTool.name}`);
+    flash(true, `تم صرف ${data}${isConsumable ? "" : " قطعة"} من ${issueTool.name}`);
   };
 
   /* ─────────── حركة على عهدة ─────────── */
@@ -140,8 +150,9 @@ export default function CustodyPanel({
   const eventKinds = (row: CustodyRow): EventKind[] =>
     row.tools?.is_consumable ? ["استهلاك", "ارتجاع", "تلف", "فقد"] : ["ارتجاع", "تلف", "فقد"];
 
-  const submitEvent = async () => {
-    if (!eventRow) return;
+  const submitEvent = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!eventRow || eventBusy) return;
     setEventBusy(true); setEventError("");
     const { data, error } = await supabase.rpc("custody_event", {
       p_custody_id: eventRow.id,
@@ -191,124 +202,130 @@ export default function CustodyPanel({
     setPrinting(false);
   };
 
-  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
-
   return (
     <div className="space-y-4">
-      {notice && (
-        <div className={cn("text-xs px-3 py-2 rounded-lg border",
-          notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
-          {notice.text}
-        </div>
-      )}
-
       {/* شريط الأدوات */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3 text-xs">
-          <span className="text-subtext">عهدة مفتوحة</span>
-          <span className="font-bold text-text tabular-nums">{open.length}</span>
-          <span className="text-subtext">عهدة مقفولة</span>
-          <span className="font-bold text-text tabular-nums">{closed.length}</span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatPill label="عهدة مفتوحة" value={open.length} tone={open.length ? "accent" : "muted"} />
+          <StatPill label="عهدة مقفولة" value={closed.length} />
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={printReceipt} disabled={printing || open.length === 0}
-            className="eg-btn-ghost !py-1.5 !text-xs disabled:opacity-40" title="إيصال اختياري بالعهدة المفتوحة">
-            <Printer className="w-3.5 h-3.5" />{printing ? "..." : "إيصال"}
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tooltip content="إيصال اختياري بالعهدة المفتوحة">
+            <button onClick={printReceipt} disabled={printing || open.length === 0} className="eg-btn-ghost eg-btn-sm">
+              {printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
+              إيصال
+            </button>
+          </Tooltip>
           {canManage && (
-            <button onClick={openIssue} className="eg-btn-primary !py-1.5 !text-xs">
-              <Plus className="w-3.5 h-3.5" />صرف عهدة
+            <button onClick={openIssue} className="eg-btn-primary eg-btn-sm">
+              <Plus className="size-3.5" />صرف عهدة
             </button>
           )}
         </div>
       </div>
 
       {/* العهدة المفتوحة */}
-      <div className="eg-card !p-0 overflow-hidden">
+      <div className="eg-card overflow-hidden !p-0">
         {open.length ? (
-          <table className="w-full text-xs border-collapse">
-            <thead>
-              <tr className="bg-card2 text-subtext">
-                <th className="px-4 py-2 text-right font-semibold">الأداة</th>
-                <th className="px-3 py-2 text-right font-semibold">الرقم التسلسلي</th>
-                <th className="px-3 py-2 text-center font-semibold">المتبقي عند الفني</th>
-                <th className="px-3 py-2 text-right font-semibold">تاريخ الصرف</th>
-                <th className="px-3 py-2 text-right font-semibold">الحالة</th>
-                {canManage && <th className="px-3 py-2 text-right font-semibold">إجراء</th>}
-                <th className="w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {open.map(r => (
-                <Fragment key={r.id}>
-                  <tr className="border-t border-border/40 hover:bg-card2/50">
-                    <td className="px-4 py-2">
-                      <div className="text-text font-medium">{r.tools?.name ?? "—"}</div>
-                      <div className="text-[10px] text-subtext">{r.tools?.is_consumable ? "مستهلكة" : "قابلة لإعادة الاستخدام"}</div>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-accent">{r.tool_items?.serial_no ?? "—"}</td>
-                    <td className="px-3 py-2 text-center tabular-nums">
-                      <span className="font-bold text-text">{fmt(r.open_qty)}</span>
-                      <span className="text-subtext"> / {fmt(r.qty)} {r.tools?.unit ?? ""}</span>
-                    </td>
-                    <td className="px-3 py-2 text-subtext tabular-nums">{r.issued_at}</td>
-                    <td className="px-3 py-2"><span className={cn("px-2 py-0.5 rounded text-[11px]", STATUS_STYLE[r.status])}>{r.status}</span></td>
-                    {canManage && (
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          {eventKinds(r).map(k => (
-                            <button key={k} onClick={() => openEvent(r, k)}
-                              className="px-2 py-0.5 rounded border border-border text-[11px] text-subtext hover:text-text hover:border-accent/60">
-                              {EVENT_LABEL[k]}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
-                    )}
-                    <td className="px-2 py-2">
-                      <button onClick={() => setExpanded(expanded === r.id ? null : r.id)} className="text-subtext hover:text-text">
-                        {expanded === r.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-                    </td>
-                  </tr>
-                  {expanded === r.id && <EventsRow events={r.custody_events} note={r.note} colSpan={canManage ? 7 : 6} />}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        ) : <EmptyState message="مفيش عهدة مفتوحة عند الفني ده" />}
+          <div className="overflow-x-auto">
+            <table className={cn("eg-table", canManage ? "min-w-[880px]" : "min-w-[660px]")}>
+              <thead>
+                <tr>
+                  <th>الأداة</th>
+                  <th>الرقم التسلسلي</th>
+                  <th className="text-center">المتبقي عند الفني</th>
+                  <th>تاريخ الصرف</th>
+                  <th>الحالة</th>
+                  {canManage && <th>إجراء</th>}
+                  <th className="w-12"><span className="sr-only">سجل الحركات</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {open.map(r => {
+                  const isOpen = expanded === r.id;
+                  return (
+                    <Fragment key={r.id}>
+                      <tr className={cn(isOpen && "bg-accent/[0.06]")}>
+                        <td>
+                          <div className="font-medium text-text">{r.tools?.name ?? "—"}</div>
+                          <div className="text-[11px] text-subtext">{r.tools?.is_consumable ? "مستهلكة" : "قابلة لإعادة الاستخدام"}</div>
+                        </td>
+                        <td className="font-mono text-[12px] text-accent">
+                          {r.tool_items?.serial_no ?? <span className="font-sans text-subtext">—</span>}
+                        </td>
+                        <td className="text-center tabular-nums">
+                          <span className="font-semibold text-text">{fmt(r.open_qty)}</span>
+                          <span className="text-subtext"> / {fmt(r.qty)} {r.tools?.unit ?? ""}</span>
+                        </td>
+                        <td className="tabular-nums text-subtext">{r.issued_at}</td>
+                        <td><Badge label={r.status} /></td>
+                        {canManage && (
+                          <td>
+                            <div className="flex flex-wrap gap-1.5">
+                              {eventKinds(r).map(k => (
+                                <button key={k} onClick={() => openEvent(r, k)} className="eg-btn-ghost eg-btn-xs">
+                                  {EVENT_LABEL[k]}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                        )}
+                        <td><ExpandButton open={isOpen} onClick={() => toggleExpanded(r.id)} /></td>
+                      </tr>
+                      {isOpen && <EventsRow events={r.custody_events} note={r.note} colSpan={canManage ? 7 : 6} />}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : <EmptyState icon={PackageOpen} message="مفيش عهدة مفتوحة عند الفني ده" />}
       </div>
 
       {/* العهد المقفولة */}
       {closed.length > 0 && (
-        <div>
-          <button onClick={() => setShowClosed(v => !v)} className="text-xs text-subtext hover:text-text flex items-center gap-1">
-            {showClosed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            العهد المقفولة ({closed.length})
+        <div className="space-y-2">
+          <button type="button" onClick={() => setShowClosed(v => !v)} aria-expanded={showClosed}
+            className="eg-btn-subtle eg-btn-sm">
+            <ChevronDown className={cn("size-3.5 transition-transform duration-200", showClosed && "rotate-180")} />
+            العهد المقفولة
+            <span className="tabular-nums">({closed.length})</span>
           </button>
           {showClosed && (
-            <div className="eg-card !p-0 overflow-hidden mt-2">
-              <table className="w-full text-xs border-collapse">
-                <tbody>
-                  {closed.map(r => (
-                    <Fragment key={r.id}>
-                      <tr className="border-t border-border/40 first:border-t-0">
-                        <td className="px-4 py-2 text-text">{r.tools?.name ?? "—"}</td>
-                        <td className="px-3 py-2 font-mono text-subtext">{r.tool_items?.serial_no ?? "—"}</td>
-                        <td className="px-3 py-2 text-subtext tabular-nums">{fmt(r.qty)} {r.tools?.unit ?? ""}</td>
-                        <td className="px-3 py-2 text-subtext tabular-nums">{r.issued_at}</td>
-                        <td className="px-3 py-2"><span className={cn("px-2 py-0.5 rounded text-[11px]", STATUS_STYLE[r.status])}>{r.status}</span></td>
-                        <td className="px-2 py-2">
-                          <button onClick={() => setExpanded(expanded === r.id ? null : r.id)} className="text-subtext hover:text-text">
-                            {expanded === r.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                          </button>
-                        </td>
-                      </tr>
-                      {expanded === r.id && <EventsRow events={r.custody_events} note={r.note} colSpan={6} />}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
+            <div className="eg-card animate-fade-in overflow-hidden !p-0">
+              <div className="overflow-x-auto">
+                <table className="eg-table min-w-[620px]">
+                  <thead>
+                    <tr>
+                      <th>الأداة</th>
+                      <th>الرقم التسلسلي</th>
+                      <th>الكمية</th>
+                      <th>تاريخ الصرف</th>
+                      <th>الحالة</th>
+                      <th className="w-12"><span className="sr-only">سجل الحركات</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {closed.map(r => {
+                      const isOpen = expanded === r.id;
+                      return (
+                        <Fragment key={r.id}>
+                          <tr className={cn(isOpen && "bg-accent/[0.06]")}>
+                            <td className="text-text">{r.tools?.name ?? "—"}</td>
+                            <td className="font-mono text-[12px] text-subtext">{r.tool_items?.serial_no ?? "—"}</td>
+                            <td className="tabular-nums text-subtext">{fmt(r.qty)} {r.tools?.unit ?? ""}</td>
+                            <td className="tabular-nums text-subtext">{r.issued_at}</td>
+                            <td><Badge label={r.status} /></td>
+                            <td><ExpandButton open={isOpen} onClick={() => toggleExpanded(r.id)} /></td>
+                          </tr>
+                          {isOpen && <EventsRow events={r.custody_events} note={r.note} colSpan={6} />}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -316,109 +333,141 @@ export default function CustodyPanel({
 
       {/* ═══ مودال صرف العهدة ═══ */}
       <Modal open={issueOpen} onClose={() => setIssueOpen(false)} title={`صرف عهدة — ${techName}`}>
-        <div className="space-y-4">
-          <div>
-            <label className="eg-label">الأداة</label>
+        <form onSubmit={submitIssue} noValidate className="space-y-4">
+          <Field label="الأداة" required
+            hint={issuableTools.length === 0 ? "مفيش أدوات متاحة للقسم ده — ضيفها من صفحة الأدوات الأول" : undefined}>
             <select value={issueToolId} onChange={e => { setIssueToolId(e.target.value); setIssueSerials([]); setIssueQty("1"); }}
-              className="eg-select">
+              className="eg-select" autoFocus>
               <option value="">— اختار من الكتالوج —</option>
               {issuableTools.map(t => (
                 <option key={t.id} value={t.id}>{t.name}{t.is_consumable ? " (مستهلكة)" : ""}</option>
               ))}
             </select>
-            {issuableTools.length === 0 && (
-              <p className="text-[11px] text-subtext mt-1">مفيش أدوات متاحة للقسم ده — ضيفها من صفحة الأدوات الأول</p>
-            )}
-          </div>
+          </Field>
 
           {issueTool && issueTool.is_consumable && (
-            <div>
-              <label className="eg-label">الكمية ({issueTool.unit})</label>
+            <Field label={`الكمية (${issueTool.unit})`} required>
               <input type="number" min="0.01" step="any" value={issueQty}
                 onChange={e => setIssueQty(e.target.value)} className="eg-input" />
-            </div>
+            </Field>
           )}
 
           {issueTool && !issueTool.is_consumable && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="eg-label !mb-0">الأرقام التسلسلية المتاحة</label>
-                <span className="text-[11px] text-subtext tabular-nums">متحدد {issueSerials.length} من {issueAvailable.length}</span>
-              </div>
+            <Field label="الأرقام التسلسلية المتاحة" required
+              hint={issueAvailable.length ? `متحدد ${issueSerials.length} من ${issueAvailable.length}` : undefined}>
               {issueAvailable.length ? (
-                <div className="bg-card2 rounded-lg p-2 max-h-48 overflow-y-auto grid grid-cols-2 gap-1.5">
-                  {issueAvailable.map(i => (
-                    <label key={i.id} className="flex items-center gap-2 cursor-pointer text-xs text-text font-mono px-2 py-1 rounded hover:bg-card">
-                      <input type="checkbox" checked={issueSerials.includes(i.id)} onChange={() => toggleSerial(i.id)}
-                        className="accent-emerald-500 w-4 h-4" />
-                      {i.serial_no}
-                    </label>
-                  ))}
+                <div className="grid max-h-52 grid-cols-2 gap-2 overflow-y-auto overscroll-contain sm:grid-cols-3">
+                  {issueAvailable.map(i => {
+                    const on = issueSerials.includes(i.id);
+                    return (
+                      <label key={i.id} className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 font-mono text-xs text-text transition-colors duration-150",
+                        on ? "border-accent/50 bg-accent/10" : "border-border/60 bg-card2/50 hover:border-border-strong",
+                      )}>
+                        <input type="checkbox" checked={on} onChange={() => toggleSerial(i.id)} className="shrink-0" />
+                        <span className="min-w-0 truncate">{i.serial_no}</span>
+                      </label>
+                    );
+                  })}
                 </div>
-              ) : <p className="text-xs text-warning">مفيش قطع متاحة من الأداة دي في المخزن</p>}
-            </div>
+              ) : (
+                <p className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  مفيش قطع متاحة من الأداة دي في المخزن
+                </p>
+              )}
+            </Field>
           )}
 
-          <div>
-            <label className="eg-label">ملاحظة (اختياري)</label>
+          <Field label="ملاحظة (اختياري)">
             <input value={issueNote} onChange={e => setIssueNote(e.target.value)} className="eg-input" />
-          </div>
+          </Field>
 
-          {issueError && <p className="text-xs text-danger">{issueError}</p>}
-          <button onClick={submitIssue} disabled={issueBusy || !issueTool} className="eg-btn-success w-full justify-center">
+          <FormError>{issueError}</FormError>
+          <button type="submit" disabled={issueBusy || !issueTool} className="eg-btn-success w-full">
+            {issueBusy ? <Spinner /> : <Check className="size-4" />}
             {issueBusy ? "جاري الصرف..." : "تأكيد الصرف"}
           </button>
-        </div>
+        </form>
       </Modal>
 
       {/* ═══ مودال الحركة ═══ */}
       <Modal open={!!eventRow} onClose={() => setEventRow(null)} title={eventRow ? `${EVENT_LABEL[eventKind]} — ${eventRow.tools?.name ?? ""}` : ""} size="sm">
         {eventRow && (
-          <div className="space-y-4">
-            <div className="bg-card2 rounded-lg p-3 text-xs">
-              <p className="text-text font-medium">{eventRow.tools?.name}{eventRow.tool_items ? ` · ${eventRow.tool_items.serial_no}` : ""}</p>
-              <p className="text-subtext mt-1">المتبقي عند الفني: <span className="text-text font-bold tabular-nums">{fmt(eventRow.open_qty)}</span> {eventRow.tools?.unit ?? ""}</p>
+          <form onSubmit={submitEvent} noValidate className="space-y-4">
+            <div className="rounded-lg border border-border/60 bg-card2/50 px-3 py-2.5 text-xs">
+              <p className="font-medium text-text">
+                {eventRow.tools?.name}
+                {eventRow.tool_items && <span className="font-mono text-accent"> · {eventRow.tool_items.serial_no}</span>}
+              </p>
+              <p className="mt-1 text-subtext">
+                المتبقي عند الفني: <span className="font-bold tabular-nums text-text">{fmt(eventRow.open_qty)}</span> {eventRow.tools?.unit ?? ""}
+              </p>
             </div>
             {eventRow.tools?.is_consumable ? (
-              <div>
-                <label className="eg-label">الكمية</label>
+              <Field label="الكمية" required>
                 <input type="number" min="0.01" step="any" max={eventRow.open_qty} value={eventQty}
-                  onChange={e => setEventQty(e.target.value)} className="eg-input" />
-              </div>
+                  onChange={e => setEventQty(e.target.value)} className="eg-input" autoFocus />
+              </Field>
             ) : (
               <p className="text-[11px] text-subtext">القطعة دي وحدة واحدة، والحركة بتقفل السطر.</p>
             )}
-            <div>
-              <label className="eg-label">ملاحظة (اختياري)</label>
-              <input value={eventNote} onChange={e => setEventNote(e.target.value)} className="eg-input" />
-            </div>
-            {eventError && <p className="text-xs text-danger">{eventError}</p>}
-            <button onClick={submitEvent} disabled={eventBusy} className="eg-btn-success w-full justify-center">
+            <Field label="ملاحظة (اختياري)">
+              <input value={eventNote} onChange={e => setEventNote(e.target.value)} className="eg-input"
+                autoFocus={!eventRow.tools?.is_consumable} />
+            </Field>
+            <FormError>{eventError}</FormError>
+            <button type="submit" disabled={eventBusy} className="eg-btn-success w-full">
+              {eventBusy ? <Spinner /> : <Check className="size-4" />}
               {eventBusy ? "جاري التسجيل..." : "تأكيد"}
             </button>
-          </div>
+          </form>
         )}
       </Modal>
     </div>
   );
 }
 
+/* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
+
+function ExpandButton({ open, onClick }: { open: boolean; onClick: () => void }) {
+  const label = open ? "إخفاء سجل الحركات" : "عرض سجل الحركات";
+  return (
+    <Tooltip content={label}>
+      <button type="button" onClick={onClick} aria-label={label} aria-expanded={open} className="eg-icon-btn">
+        <ChevronDown className={cn("size-4 transition-transform duration-200", open && "rotate-180")} />
+      </button>
+    </Tooltip>
+  );
+}
+
 function EventsRow({ events, note, colSpan }: { events: CustodyEvent[]; note: string | null; colSpan: number }) {
   const sorted = [...events].sort((a, b) => a.created_at.localeCompare(b.created_at));
   return (
-    <tr className="bg-card2/30 border-t border-border/30">
-      <td colSpan={colSpan} className="px-4 py-3">
-        {note && <p className="text-[11px] text-subtext mb-2">ملاحظة الصرف: {note}</p>}
-        <p className="text-[11px] text-subtext mb-1.5">سجل الحركات</p>
-        <div className="space-y-1">
-          {sorted.map((e, i) => (
-            <div key={i} className="flex items-center gap-3 text-[11px]">
-              <span className="text-subtext tabular-nums w-36">{e.created_at.slice(0, 16).replace("T", " ")}</span>
-              <span className="text-text w-20">{e.event}</span>
-              <span className="tabular-nums w-12 text-subtext">{e.qty}</span>
-              <span className="text-subtext">{e.note ?? ""}</span>
-            </div>
-          ))}
+    <tr>
+      <td colSpan={colSpan} className="!bg-card2/40 px-4 py-3">
+        <div className="animate-fade-in space-y-2.5">
+          {note && (
+            <p className="text-[11px] text-subtext">ملاحظة الصرف: <span className="text-text">{note}</span></p>
+          )}
+          <p className="text-[11px] font-semibold text-subtext">سجل الحركات</p>
+          {sorted.length ? (
+            <ol>
+              {sorted.map((e, i) => (
+                <li key={i} className="relative pb-2.5 pr-5 last:pb-0">
+                  {i < sorted.length - 1 && (
+                    <span aria-hidden className="absolute -bottom-1.5 right-[3.5px] top-3.5 w-px bg-border-strong" />
+                  )}
+                  <span aria-hidden className={cn("absolute right-0 top-1.5 size-2 rounded-full", EVENT_DOT[e.event] ?? "bg-accent")} />
+                  <div className="flex flex-wrap items-baseline gap-x-3 text-xs leading-5">
+                    <span className="font-medium text-text">{e.event}</span>
+                    <span className="tabular-nums text-subtext">الكمية: {e.qty}</span>
+                    <span className="tabular-nums text-subtext">{e.created_at.slice(0, 16).replace("T", " ")}</span>
+                  </div>
+                  {e.note && <p className="text-[11px] leading-5 text-subtext">{e.note}</p>}
+                </li>
+              ))}
+            </ol>
+          ) : <p className="text-[11px] text-subtext">مفيش حركات مسجلة</p>}
         </div>
       </td>
     </tr>

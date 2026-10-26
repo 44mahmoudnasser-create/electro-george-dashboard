@@ -1,9 +1,20 @@
 "use client";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { cn } from "@/lib/utils";
+import { PRIORITY_RANK } from "@/lib/status";
+import Badge from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
 import Modal from "@/components/ui/Modal";
-import { Search, Settings, Plus, Paintbrush, Layers, AlertTriangle, Radio, RefreshCw, X } from "lucide-react";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { FilterChip, SearchInput } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import {
+  Paintbrush, Settings, Plus, Layers, AlertTriangle, RefreshCw, Info, Check, Hourglass, Lock, Palette,
+} from "lucide-react";
 
 /* ═══════════════════════ أنواع وثوابت ═══════════════════════ */
 
@@ -23,14 +34,6 @@ type Item = {
 };
 type PaintType = { id: number; name: string; active: boolean };
 
-const PRIORITY_RANK: Record<string, number> = { "عاجلة": 0, "عالية": 1, "متوسطة": 2, "منخفضة": 3 };
-const PRIORITY_STYLE: Record<string, string> = {
-  "عاجلة": "bg-danger/15 text-danger",
-  "عالية": "bg-warning/15 text-warning",
-  "متوسطة": "bg-accent/15 text-accent",
-  "منخفضة": "bg-card2 text-subtext",
-};
-
 const getWO = (it: Item): WO | undefined =>
   (Array.isArray(it.work_order) ? it.work_order[0] : it.work_order) ?? undefined;
 const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ""));
@@ -48,6 +51,7 @@ const isLate = (it: Item) => {
 export default function PaintMonitoringClient({
   initialItems, initialPaintTypes,
 }: { initialItems: Item[]; initialPaintTypes: PaintType[] }) {
+  const toast = useToast();
   const [items, setItems] = useState(initialItems);
   const [paintTypes, setPaintTypes] = useState(initialPaintTypes);
   const [live, setLive] = useState(false);
@@ -122,10 +126,14 @@ export default function PaintMonitoringClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, grouped, paintTypes]);
 
+  const filtersActive = !!search || woFilter !== "الكل" || typeFilter !== "الكل" || lateOnly;
+  const clearFilters = () => { setSearch(""); setWoFilter("الكل"); setTypeFilter("الكل"); setLateOnly(false); };
+
   /* ─────────── التحديد ─────────── */
   const toggleSelect = (id: number) =>
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allVisibleSelected = visible.length > 0 && visible.every(it => selected.has(it.id));
+  const someVisibleSelected = visible.some(it => selected.has(it.id));
   const toggleSelectAll = () =>
     setSelected(allVisibleSelected ? new Set() : new Set(visible.map(it => it.id)));
 
@@ -140,8 +148,9 @@ export default function PaintMonitoringClient({
     setLogItem(it); setLogQty(""); setLogNote(""); setLogError("");
   };
 
-  const submitLog = async () => {
-    if (!logItem) return;
+  const submitLog = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!logItem || logging) return;
     const q = parseFloat(logQty);
     if (!q || q <= 0) { setLogError("أدخل كمية صحيحة"); return; }
     if (q > avail(logItem)) { setLogError(`الكمية أكبر من المتاح للدهان (${fmt(avail(logItem))})`); return; }
@@ -154,30 +163,33 @@ export default function PaintMonitoringClient({
     const res = data as { qty_paint: number };
     setItems(prev => prev.map(it => it.id === logItem.id ? { ...it, qty_paint: Number(res.qty_paint) } : it));
     setLogItem(null);
+    toast.success(`تم تسجيل ${fmt(q)} قطعة دهان`);
   };
 
   /* ─────────── تحديد نوع الدهان ─────────── */
   const [typeTargets, setTypeTargets] = useState<number[] | null>(null);
   const [typeDraft, setTypeDraft] = useState<string>("");
   const [typeSaving, setTypeSaving] = useState(false);
-  const [typeMsg, setTypeMsg] = useState("");
+  const [typeMsg, setTypeMsg] = useState("");      // بنود اتسابت (الدهان بدأ عليها)
+  const [typeError, setTypeError] = useState("");
 
   const openType = (ids: number[]) => {
     const first = items.find(it => it.id === ids[0]);
     setTypeDraft(ids.length === 1 && first?.paint_type_id != null ? String(first.paint_type_id) : "");
-    setTypeTargets(ids); setTypeMsg("");
+    setTypeTargets(ids); setTypeMsg(""); setTypeError("");
   };
 
-  const saveType = async () => {
-    if (!typeTargets) return;
-    setTypeSaving(true); setTypeMsg("");
+  const saveType = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!typeTargets || typeSaving) return;
+    setTypeSaving(true); setTypeMsg(""); setTypeError("");
     const newId = typeDraft ? parseInt(typeDraft) : null;
     const { data, error } = await supabase.rpc("set_paint_type", {
       p_item_ids: typeTargets,
       p_paint_type_id: newId,
     });
     setTypeSaving(false);
-    if (error) { setTypeMsg(error.message); return; }
+    if (error) { setTypeError(error.message); return; }
     const res = data as { updated: number[]; skipped: { id: number; description: string }[] };
     const updated = new Set(res.updated);
     setItems(prev => prev.map(it => updated.has(it.id) ? { ...it, paint_type_id: newId } : it));
@@ -186,6 +198,7 @@ export default function PaintMonitoringClient({
       setTypeMsg(`اتغير النوع لـ ${res.updated.length} بند. ${res.skipped.length} بند اتسابوا لأن الدهان بدأ عليهم: ${res.skipped.map(s => s.description).join("، ")}`);
     } else {
       setTypeTargets(null);
+      toast.success("تم حفظ نوع الدهان");
     }
   };
 
@@ -194,21 +207,23 @@ export default function PaintMonitoringClient({
   const [newTypeName, setNewTypeName] = useState("");
   const [addingType, setAddingType] = useState(false);
 
-  const addType = async () => {
+  const addType = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     const name = newTypeName.trim();
-    if (!name) return;
+    if (!name || addingType) return;
     setAddingType(true);
     const { data, error } = await supabase.from("paint_types")
       .insert({ name }).select("id, name, active").single();
     setAddingType(false);
-    if (error) { alert(error.message.includes("unique") ? "النوع ده موجود قبل كده" : error.message); return; }
+    if (error) { toast.error(error.message.includes("unique") ? "النوع ده موجود قبل كده" : error.message); return; }
     setPaintTypes(prev => [...prev, data as PaintType].sort((a, b) => a.name.localeCompare(b.name)));
     setNewTypeName("");
+    toast.success("تمت إضافة نوع الدهان");
   };
 
   const toggleType = async (t: PaintType) => {
     const { error } = await supabase.from("paint_types").update({ active: !t.active }).eq("id", t.id);
-    if (error) { alert(error.message); return; }
+    if (error) { toast.error(error.message); return; }
     setPaintTypes(prev => prev.map(x => x.id === t.id ? { ...x, active: !t.active } : x));
   };
 
@@ -235,288 +250,369 @@ export default function PaintMonitoringClient({
 
   /* ═══════════════════════ العرض ═══════════════════════ */
 
-  return (
-    <div className="p-4 md:p-6 w-full mx-auto space-y-4">
-      {/* الهيدر */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-text flex items-center gap-2">
-            🎨 متابعة قسم الدهان
-            <span title={live ? "متصل — التحديث لحظي" : "غير متصل"}
-              className={`inline-flex items-center gap-1 text-[11px] font-normal px-2 py-0.5 rounded-full ${live ? "bg-success/15 text-success" : "bg-card2 text-subtext"}`}>
-              <Radio className="w-3 h-3" />{live ? "مباشر" : "غير متصل"}
-            </span>
-          </h1>
-          <p className="text-sm text-subtext mt-0.5">الأجزاء اللي اتستلمت من الصاج ومحتاجة دهان، مرتبة حسب نوع الدهان</p>
-        </div>
-        <button onClick={() => setTypesOpen(true)} className="eg-btn-ghost text-sm">
-          <Settings className="w-4 h-4" />أنواع الدهان
-        </button>
-      </div>
+  const activeTypesCount = paintTypes.filter(t => t.active).length;
+  const visibleReady = visible.reduce((a, it) => a + avail(it), 0);
+  const typeSingle = typeTargets && typeTargets.length === 1 ? items.find(it => it.id === typeTargets[0]) : undefined;
 
-      {newItemsPending && (
-        <div className="eg-card !py-3 flex items-center justify-between border-accent/40">
-          <span className="text-sm text-text">فيه بنود جديدة اتضافت</span>
-          <button onClick={() => window.location.reload()} className="eg-btn-primary text-xs !py-1.5">
-            <RefreshCw className="w-3.5 h-3.5" />تحديث
+  const emptyAction = paintTypes.length === 0
+    ? (
+      <button type="button" onClick={() => setTypesOpen(true)} className="eg-btn-primary eg-btn-sm">
+        <Settings className="size-3.5" />أنواع الدهان
+      </button>
+    )
+    : filtersActive
+      ? <button type="button" onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+      : !showWaiting && stats.waiting > 0
+        ? (
+          <button type="button" onClick={() => setShowWaiting(true)} className="eg-btn-ghost eg-btn-sm">
+            <Hourglass className="size-3.5" />عرض المنتظر من الصاج
           </button>
-        </div>
-      )}
+        )
+        : undefined;
 
-      {/* الكروت */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Card title="جاهز للدهان الآن" main={stats.ready} mainLabel="قطعة مستلمة من الصاج"
-          sub={`${stats.items} بند`} accent />
-        <Card title="إجمالي المتبقي" main={stats.remaining} mainLabel="قطعة لسه ماتدهنتش"
-          second={stats.noType} secondLabel="بند بدون نوع دهان" />
-        <Card title="بانتظار الصاج" main={stats.waiting} mainLabel="قطعة لسه ماتستلمتش"
-          second={stats.late} secondLabel="أمر متأخر" secondWarn />
-        <Card title="أنواع الدهان" main={paintTypes.filter(t => t.active).length} mainLabel="نوع نشط"
-          sub={`${paintTypes.length} إجمالي`} />
-      </div>
+  return (
+    <Page width="full">
+      <PageHeader
+        title="متابعة قسم الدهان"
+        icon={Paintbrush}
+        meta={<LiveBadge live={live} hint={live ? "متصل — التحديث لحظي" : "غير متصل"} />}
+        subtitle="الأجزاء اللي اتستلمت من الصاج ومحتاجة دهان، مرتبة حسب نوع الدهان"
+        actions={
+          <button type="button" onClick={() => setTypesOpen(true)} className="eg-btn-ghost eg-btn-sm">
+            <Settings className="size-3.5" />أنواع الدهان
+          </button>
+        }
+      />
 
-      {/* الفلاتر */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-subtext" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            className="eg-input pr-9 w-56" placeholder="بحث بالوصف أو رقم القطعة أو الأمر" />
-        </div>
-        <select value={woFilter} onChange={e => setWoFilter(e.target.value)} className="eg-select w-40">
-          <option value="الكل">كل الأوامر</option>
-          {woOptions.map(w => <option key={w} value={w}>{w}</option>)}
-        </select>
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="eg-select w-44">
-          <option value="الكل">كل أنواع الدهان</option>
-          <option value="none">بدون نوع</option>
-          {paintTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        <Chip on={lateOnly} onClick={() => setLateOnly(v => !v)}>
-          <AlertTriangle className="w-3.5 h-3.5" />المتأخر فقط{stats.late ? ` (${stats.late})` : ""}
-        </Chip>
-        <Chip on={grouped} onClick={() => setGroupOverride(!grouped)}>
-          <Layers className="w-3.5 h-3.5" />تجميع بنوع الدهان
-        </Chip>
-        <Chip on={showWaiting} onClick={() => setShowWaiting(v => !v)}>عرض المنتظر من الصاج</Chip>
-      </div>
-
-      {/* شريط التحديد */}
-      {selected.size > 0 && (
-        <div className="eg-card !py-3 flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-sm text-text">تم تحديد {selected.size} بند</span>
-          <div className="flex gap-2">
-            <button onClick={() => openType(Array.from(selected))} className="eg-btn-primary text-sm !py-1.5">
-              <Paintbrush className="w-4 h-4" />تحديد نوع الدهان
+      <PageBody>
+        {newItemsPending && (
+          <div role="status" className="eg-card flex animate-fade-in flex-wrap items-center gap-3 border-accent/40 bg-accent/[0.04] !py-3">
+            <Info className="size-4 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 text-sm text-text">فيه بنود جديدة اتضافت</span>
+            <button type="button" onClick={() => window.location.reload()} className="eg-btn-primary eg-btn-sm">
+              <RefreshCw className="size-3.5" />تحديث
             </button>
-            <button onClick={() => setSelected(new Set())} className="eg-btn-ghost text-sm !py-1.5">إلغاء التحديد</button>
           </div>
-        </div>
-      )}
-
-      {/* الجدول */}
-      <div className="eg-card !p-0 overflow-x-auto">
-        <table className="eg-table w-full min-w-[960px]">
-          <thead><tr>
-            <th className="w-10">
-              <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} aria-label="تحديد الكل" />
-            </th>
-            <th className="w-36">أمر الشغل</th>
-            <th>الوصف</th>
-            <th className="w-28">Part No.</th>
-            <th className="w-28">الخامة / السُمك</th>
-            <th className="w-40">نوع الدهان</th>
-            <th className="w-20">المطلوب</th>
-            <th className="w-20">من الصاج</th>
-            <th className="w-20">اتدهن</th>
-            <th className="w-24">المتاح</th>
-            <th className="w-28">إجراء</th>
-          </tr></thead>
-          <tbody>
-            {groups.map(g => (
-              <Fragment key={g.key}>
-                {grouped && (
-                  <tr className="bg-card2/60">
-                    <td colSpan={11} className="!py-2 text-xs">
-                      <span className="font-bold text-text">{g.label}</span>
-                      <span className="text-subtext mr-3">
-                        {g.items.length} بند — {fmt(g.items.reduce((a, it) => a + avail(it), 0))} قطعة جاهزة
-                      </span>
-                    </td>
-                  </tr>
-                )}
-                {g.items.map(it => {
-                  const wo = getWO(it);
-                  const late = isLate(it);
-                  const a = avail(it);
-                  return (
-                    <tr key={it.id} className={a <= 0 ? "opacity-50" : ""}>
-                      <td><input type="checkbox" checked={selected.has(it.id)} onChange={() => toggleSelect(it.id)} /></td>
-                      <td>
-                        <div className="font-mono text-accent">{wo?.wo_number ?? "—"}</div>
-                        <div className="flex items-center gap-1 mt-1 flex-wrap">
-                          {wo?.priority && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${PRIORITY_STYLE[wo.priority] ?? "bg-card2 text-subtext"}`}>{wo.priority}</span>
-                          )}
-                          {wo?.expected_delivery && (
-                            <span className={`text-[10px] ${late ? "text-danger font-bold" : "text-subtext"}`}>
-                              {late ? "متأخر · " : ""}{wo.expected_delivery}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="text-text whitespace-normal break-words">{it.description}</td>
-                      <td className="font-mono text-xs">{it.part_no ?? "—"}</td>
-                      <td className="text-xs">{it.sheet_steel ?? "—"} / {it.thickness ?? "—"}</td>
-                      <td>
-                        {it.paint_type_id != null
-                          ? <span className="text-xs px-2 py-1 rounded bg-accent/15 text-accent">{typeName(it.paint_type_id)}</span>
-                          : <span className="text-xs px-2 py-1 rounded bg-warning/15 text-warning">بدون نوع</span>}
-                      </td>
-                      <td>{fmt(it.qty)}</td>
-                      <td className="text-text">{fmt(it.qty_sheet ?? 0)}</td>
-                      <td className="text-success font-medium">{fmt(it.qty_paint ?? 0)}</td>
-                      <td>
-                        <span className={`font-bold ${a > 0 ? "text-warning" : "text-subtext"}`}>{fmt(a)}</span>
-                        {waitingSheet(it) > 0 && (
-                          <div className="text-[10px] text-subtext">+{fmt(waitingSheet(it))} منتظرة الصاج</div>
-                        )}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => openLog(it)} disabled={a <= 0}
-                            className="eg-btn-primary text-xs !py-1.5 disabled:opacity-40">
-                            تسجيل دهان
-                          </button>
-                          {(it.qty_paint ?? 0) === 0 && (
-                            <button onClick={() => openType([it.id])} className="text-subtext hover:text-accent" title="تغيير نوع الدهان">
-                              <Paintbrush className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-        {visible.length === 0 && (
-          <EmptyState message={paintTypes.length === 0
-            ? "ابدأ بإضافة أنواع الدهان من زرار 'أنواع الدهان'"
-            : "مفيش أجزاء جاهزة للدهان دلوقتي"} />
         )}
-      </div>
+
+        {/* كروت الملخص */}
+        <div className="eg-stagger grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <SummaryCard title="جاهز للدهان الآن" main={stats.ready} mainLabel="قطعة مستلمة من الصاج"
+            sub={`${stats.items} بند`} accent />
+          <SummaryCard title="إجمالي المتبقي" main={stats.remaining} mainLabel="قطعة لسه ماتدهنتش"
+            second={stats.noType} secondLabel="بند بدون نوع دهان" />
+          <SummaryCard title="بانتظار الصاج" main={stats.waiting} mainLabel="قطعة لسه ماتستلمتش"
+            second={stats.late} secondLabel="أمر متأخر" secondWarn />
+          <SummaryCard title="أنواع الدهان" main={activeTypesCount} mainLabel="نوع نشط"
+            sub={`${paintTypes.length} إجمالي`} />
+        </div>
+
+        {/* الجدول + شريط الفلاتر */}
+        <div className="eg-card overflow-hidden !p-0">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2.5">
+            <SearchInput value={search} onChange={setSearch} placeholder="بحث بالوصف أو رقم القطعة أو الأمر" className="w-full sm:w-64" />
+            <select value={woFilter} onChange={e => setWoFilter(e.target.value)}
+              aria-label="أمر الشغل" title="أمر الشغل" className="eg-select eg-input-sm w-36">
+              <option value="الكل">كل الأوامر</option>
+              {woOptions.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
+            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+              aria-label="نوع الدهان" title="نوع الدهان" className="eg-select eg-input-sm w-40">
+              <option value="الكل">كل أنواع الدهان</option>
+              <option value="none">بدون نوع</option>
+              {paintTypes.filter(t => t.active).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <span aria-hidden className="mx-0.5 hidden h-5 w-px bg-border sm:block" />
+            <FilterChip active={lateOnly} onClick={() => setLateOnly(v => !v)} count={stats.late || undefined} tone="danger">
+              <AlertTriangle className="size-3.5" />المتأخر فقط
+            </FilterChip>
+            <FilterChip active={grouped} onClick={() => setGroupOverride(!grouped)}>
+              <Layers className="size-3.5" />تجميع بنوع الدهان
+            </FilterChip>
+            <FilterChip active={showWaiting} onClick={() => setShowWaiting(v => !v)}>عرض المنتظر من الصاج</FilterChip>
+            {visible.length > 0 && (
+              <span className="ms-auto whitespace-nowrap text-xs tabular-nums text-subtext">
+                {visible.length} بند · {fmt(visibleReady)} قطعة جاهزة
+              </span>
+            )}
+          </div>
+
+          {visible.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="eg-table eg-table-compact min-w-[960px]">
+                <thead>
+                  <tr>
+                    <th className="w-10">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAll} aria-label="تحديد الكل"
+                        ref={el => { if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected; }} />
+                    </th>
+                    <th className="w-40">أمر الشغل</th>
+                    <th>الوصف</th>
+                    <th className="w-28">Part No.</th>
+                    <th className="w-28">الخامة / السُمك</th>
+                    <th className="w-40">نوع الدهان</th>
+                    <th className="w-20">المطلوب</th>
+                    <th className="w-20">من الصاج</th>
+                    <th className="w-20">اتدهن</th>
+                    <th className="w-24">المتاح</th>
+                    <th className="w-28">إجراء</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map(g => (
+                    <Fragment key={g.key}>
+                      {grouped && (
+                        <tr className="bg-card2/60">
+                          <td colSpan={11} className="!py-2">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                              <span className={cn("inline-flex items-center gap-1.5 text-xs font-bold", g.key === "none" ? "text-warning" : "text-text")}>
+                                {g.key === "none"
+                                  ? <AlertTriangle className="size-3.5" />
+                                  : <Paintbrush className="size-3.5 text-muted" />}
+                                {g.label}
+                              </span>
+                              <span className="text-[11px] tabular-nums text-subtext">
+                                {g.items.length} بند · {fmt(g.items.reduce((a, it) => a + avail(it), 0))} قطعة جاهزة
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {g.items.map(it => {
+                        const wo = getWO(it);
+                        const late = isLate(it);
+                        const a = avail(it);
+                        const isSelected = selected.has(it.id);
+                        return (
+                          <tr key={it.id} className={cn(isSelected && "bg-accent/[0.06]", a <= 0 && "opacity-50")}>
+                            <td>
+                              <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(it.id)}
+                                aria-label={`تحديد ${it.description}`} />
+                            </td>
+                            <td><WoCell wo={wo} late={late} /></td>
+                            <td className="whitespace-normal break-words text-text">{it.description}</td>
+                            <td className="font-mono text-xs text-subtext">{it.part_no ?? "—"}</td>
+                            <td className="text-xs text-subtext">{it.sheet_steel ?? "—"} / {it.thickness ?? "—"}</td>
+                            <td>
+                              {it.paint_type_id != null
+                                ? <Badge label={typeName(it.paint_type_id)} tone="accent" dot={false} />
+                                : <Badge label="بدون نوع" tone="warning" dot={false} />}
+                            </td>
+                            <td className="tabular-nums text-subtext">{fmt(it.qty)}</td>
+                            <td className="tabular-nums text-text">{fmt(it.qty_sheet ?? 0)}</td>
+                            <td className="tabular-nums font-medium text-success">{fmt(it.qty_paint ?? 0)}</td>
+                            <td className="tabular-nums">
+                              <span className={cn("font-bold", a > 0 ? "text-warning" : "text-subtext")}>{fmt(a)}</span>
+                              {waitingSheet(it) > 0 && (
+                                <div className="text-[11px] text-subtext">+{fmt(waitingSheet(it))} منتظرة الصاج</div>
+                              )}
+                            </td>
+                            <td>
+                              <div className="flex items-center gap-1.5">
+                                <button type="button" onClick={() => openLog(it)} disabled={a <= 0} className="eg-btn-primary eg-btn-xs">
+                                  تسجيل دهان
+                                </button>
+                                {(it.qty_paint ?? 0) === 0 && (
+                                  <Tooltip content="تغيير نوع الدهان">
+                                    <button type="button" onClick={() => openType([it.id])} aria-label="تغيير نوع الدهان" className="eg-icon-btn">
+                                      <Paintbrush className="size-3.5" />
+                                    </button>
+                                  </Tooltip>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              message={paintTypes.length === 0
+                ? "ابدأ بإضافة أنواع الدهان من زرار «أنواع الدهان»"
+                : "مفيش أجزاء جاهزة للدهان دلوقتي"}
+              action={emptyAction}
+            />
+          )}
+        </div>
+
+        {/* شريط التحديد — بيفضل ظاهر تحت الشاشة وإنت بتختار */}
+        {selected.size > 0 && (
+          <div className="eg-card sticky bottom-4 z-10 mx-auto flex w-fit max-w-full animate-fade-up flex-wrap items-center gap-x-4 gap-y-2 !p-3 shadow-pop">
+            <span className="text-sm text-text">
+              تم تحديد <span className="font-bold tabular-nums">{selected.size}</span> بند
+            </span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => openType(Array.from(selected))} className="eg-btn-primary eg-btn-sm">
+                <Paintbrush className="size-3.5" />تحديد نوع الدهان
+              </button>
+              <button type="button" onClick={() => setSelected(new Set())} className="eg-btn-ghost eg-btn-sm">إلغاء التحديد</button>
+            </div>
+          </div>
+        )}
+      </PageBody>
 
       {/* ── مودال تسجيل الدهان ── */}
-      <Modal open={!!logItem} onClose={() => setLogItem(null)} title="🎨 تسجيل دهان">
+      <Modal open={!!logItem} onClose={() => setLogItem(null)} title="تسجيل دهان">
         {logItem && (
-          <div className="space-y-4">
-            <div className="bg-card2 rounded-lg p-3 text-sm space-y-1">
-              <p className="text-text font-medium">{logItem.description}</p>
-              <p className="text-xs text-subtext">
-                أمر الشغل: {getWO(logItem)?.wo_number ?? "—"} · نوع الدهان: <b className="text-accent">{typeName(logItem.paint_type_id)}</b>
-              </p>
-              <p className="text-xs text-subtext">
-                المستلم من الصاج: {fmt(logItem.qty_sheet)} · اتدهن: {fmt(logItem.qty_paint)} · المتاح: <b className="text-warning">{fmt(avail(logItem))}</b>
-              </p>
-            </div>
-            <div>
-              <label className="eg-label">الكمية</label>
-              <div className="flex gap-2">
-                <input type="number" min="0.01" step="any" value={logQty} autoFocus
-                  onChange={e => setLogQty(e.target.value)} className="eg-input flex-1"
-                  onKeyDown={e => e.key === "Enter" && submitLog()} />
-                <button onClick={() => setLogQty(String(avail(logItem)))} className="eg-btn-ghost text-sm">الكل ({fmt(avail(logItem))})</button>
+          <form noValidate onSubmit={submitLog} className="space-y-4">
+            <div className="space-y-2 rounded-lg border border-border/70 bg-card2/60 p-3">
+              <p className="text-sm font-medium leading-6 text-text">{logItem.description}</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-subtext">
+                <span>أمر الشغل: <span className="font-mono text-text">{getWO(logItem)?.wo_number ?? "—"}</span></span>
+                <span>نوع الدهان: <b className="font-semibold text-accent">{typeName(logItem.paint_type_id)}</b></span>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-subtext">
+                <span>المستلم من الصاج: <span className="tabular-nums text-text">{fmt(logItem.qty_sheet)}</span></span>
+                <span>اتدهن: <span className="tabular-nums text-text">{fmt(logItem.qty_paint)}</span></span>
+                <span>المتاح: <b className="tabular-nums text-warning">{fmt(avail(logItem))}</b></span>
               </div>
             </div>
-            <div>
-              <label className="eg-label">ملاحظة (اختياري)</label>
-              <input value={logNote} onChange={e => setLogNote(e.target.value)} className="eg-input" />
-            </div>
-            {logError && <p className="text-sm text-danger">{logError}</p>}
-            <button onClick={submitLog} disabled={logging} className="eg-btn-success w-full justify-center">
-              {logging ? "جاري التسجيل..." : "✅ تأكيد"}
+
+            <Field label="الكمية" required htmlFor="paint-log-qty">
+              <div className="flex gap-2">
+                <input id="paint-log-qty" type="number" inputMode="decimal" min="0.01" step="any" value={logQty} autoFocus
+                  onChange={e => setLogQty(e.target.value)} className="eg-input min-w-0 flex-1" />
+                <button type="button" onClick={() => setLogQty(String(avail(logItem)))} className="eg-btn-ghost shrink-0">
+                  الكل (<span className="tabular-nums">{fmt(avail(logItem))}</span>)
+                </button>
+              </div>
+            </Field>
+
+            <Field label="ملاحظة" htmlFor="paint-log-note">
+              <input id="paint-log-note" value={logNote} onChange={e => setLogNote(e.target.value)} className="eg-input" />
+            </Field>
+
+            <FormError>{logError}</FormError>
+            <button type="submit" disabled={logging || !logQty} className="eg-btn-success w-full">
+              {logging ? <Spinner /> : <Check className="size-4" />}
+              {logging ? "جاري التسجيل..." : "تأكيد"}
             </button>
-          </div>
+          </form>
         )}
       </Modal>
 
       {/* ── مودال نوع الدهان ── */}
       <Modal open={!!typeTargets} onClose={() => setTypeTargets(null)}
-        title={typeTargets && typeTargets.length > 1 ? `🎨 نوع دهان ${typeTargets.length} بند` : "🎨 نوع الدهان"}>
-        <div className="space-y-4">
-          <div>
-            <label className="eg-label">نوع الدهان</label>
-            <select value={typeDraft} onChange={e => setTypeDraft(e.target.value)} className="eg-select">
+        title={typeTargets && typeTargets.length > 1 ? `نوع دهان ${typeTargets.length} بند` : "نوع الدهان"}
+        description={typeSingle?.description}>
+        <form noValidate onSubmit={saveType} className="space-y-4">
+          <Field label="نوع الدهان" htmlFor="paint-type-select"
+            hint={activeTypesCount === 0 ? "لازم تضيف نوع دهان الأول من «أنواع الدهان»" : undefined}>
+            <select id="paint-type-select" value={typeDraft} onChange={e => setTypeDraft(e.target.value)} className="eg-select">
               <option value="">— بدون نوع —</option>
               {paintTypes.filter(t => t.active || String(t.id) === typeDraft).map(t => (
                 <option key={t.id} value={t.id}>{t.name}{t.active ? "" : " (متعطل)"}</option>
               ))}
             </select>
-            {paintTypes.filter(t => t.active).length === 0 && (
-              <p className="text-xs text-subtext mt-1">لازم تضيف نوع دهان الأول من "أنواع الدهان"</p>
-            )}
-          </div>
-          <p className="text-[11px] text-subtext">مايتغيرش النوع بعد ما الدهان يبدأ على البند.</p>
-          {typeMsg && <p className="text-sm text-warning">{typeMsg}</p>}
-          <button onClick={saveType} disabled={typeSaving} className="eg-btn-primary w-full justify-center">
+          </Field>
+
+          <p className="flex items-start gap-1.5 text-[11px] leading-5 text-subtext">
+            <Lock className="mt-0.5 size-3 shrink-0 text-muted" />
+            مايتغيرش النوع بعد ما الدهان يبدأ على البند.
+          </p>
+
+          {typeMsg && (
+            <p role="status" className="animate-fade-in rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+              {typeMsg}
+            </p>
+          )}
+          <FormError>{typeError}</FormError>
+
+          <button type="submit" disabled={typeSaving} className="eg-btn-primary w-full">
+            {typeSaving ? <Spinner /> : <Check className="size-4" />}
             {typeSaving ? "جاري الحفظ..." : "حفظ"}
           </button>
-        </div>
+        </form>
       </Modal>
 
       {/* ── مودال أنواع الدهان ── */}
-      <Modal open={typesOpen} onClose={() => setTypesOpen(false)} title="⚙️ أنواع الدهان">
+      <Modal open={typesOpen} onClose={() => setTypesOpen(false)} title="أنواع الدهان">
         <div className="space-y-4">
-          <div className="flex gap-2">
+          <form onSubmit={addType} className="flex gap-2">
             <input value={newTypeName} onChange={e => setNewTypeName(e.target.value)}
-              className="eg-input flex-1" placeholder="اسم نوع الدهان (مثال: RAL 9010 مات)"
-              onKeyDown={e => e.key === "Enter" && addType()} />
-            <button onClick={addType} disabled={addingType || !newTypeName.trim()} className="eg-btn-primary">
-              <Plus className="w-4 h-4" />{addingType ? "..." : "إضافة"}
+              aria-label="اسم نوع الدهان" className="eg-input min-w-0 flex-1" placeholder="اسم نوع الدهان (مثال: RAL 9010 مات)" />
+            <button type="submit" disabled={addingType || !newTypeName.trim()} className="eg-btn-primary shrink-0">
+              {addingType ? <Spinner /> : <Plus className="size-4" />}إضافة
             </button>
-          </div>
-          <div className="space-y-2">
-            {paintTypes.map(t => (
-              <div key={t.id} className="flex items-center gap-2 bg-card2 rounded-lg px-3 py-2">
-                <span className={`text-sm flex-1 ${t.active ? "text-text" : "text-subtext line-through"}`}>{t.name}</span>
-                <button onClick={() => toggleType(t)}
-                  className={`text-xs hover:underline ${t.active ? "text-danger" : "text-success"}`}>
-                  {t.active ? "تعطيل" : "تفعيل"}
-                </button>
-              </div>
-            ))}
-            {paintTypes.length === 0 && <p className="text-xs text-subtext text-center py-3">لا توجد أنواع دهان بعد</p>}
-          </div>
-          <p className="text-[11px] text-subtext">التعطيل بيخفي النوع من الاختيار بس، والبنود القديمة اللي عليه بتفضل زي ما هي.</p>
+          </form>
+
+          {paintTypes.length > 0 ? (
+            <div className="space-y-1.5">
+              {paintTypes.map(t => (
+                <div key={t.id} className="flex items-center gap-2 rounded-lg border border-border/60 bg-card2/50 px-3 py-2">
+                  <span className={cn("min-w-0 flex-1 truncate text-sm", t.active ? "text-text" : "text-subtext line-through")}>{t.name}</span>
+                  <button type="button" onClick={() => toggleType(t)}
+                    className={cn(t.active ? "eg-btn-danger-soft" : "eg-btn-ghost", "eg-btn-xs w-14")}>
+                    {t.active ? "تعطيل" : "تفعيل"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState compact icon={Palette} message="لا توجد أنواع دهان بعد" />
+          )}
+
+          <p className="flex items-start gap-1.5 text-[11px] leading-5 text-subtext">
+            <Info className="mt-0.5 size-3 shrink-0 text-muted" />
+            التعطيل بيخفي النوع من الاختيار بس، والبنود القديمة اللي عليه بتفضل زي ما هي.
+          </p>
         </div>
       </Modal>
-    </div>
+    </Page>
   );
 }
 
 /* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
 
-function Card({ title, main, mainLabel, second, secondLabel, secondWarn, sub, accent }: {
+// مؤشر الاتصال بالتحديث اللحظي
+function LiveBadge({ live, hint }: { live: boolean; hint: string }) {
+  return (
+    <Tooltip content={hint} side="bottom">
+      <span className={cn("eg-badge rounded-full", live ? "tone-success" : "tone-neutral")}>
+        <span aria-hidden className="relative inline-flex size-1.5 shrink-0">
+          {live && <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-60 [animation-duration:1.8s]" />}
+          <span className="relative inline-flex size-1.5 rounded-full bg-current" />
+        </span>
+        {live ? "مباشر" : "غير متصل"}
+      </span>
+    </Tooltip>
+  );
+}
+
+// كارت ملخص: رقم كبير + رقم تاني اختياري بفاصل (تحت بعض على الموبايل، جنب بعض من sm)
+function SummaryCard({ title, main, mainLabel, second, secondLabel, secondWarn, sub, accent }: {
   title: string; main: number; mainLabel: string; second?: number; secondLabel?: string;
   secondWarn?: boolean; sub?: string; accent?: boolean;
 }) {
   return (
-    <div className={`eg-card !p-4 ${accent ? "!border-accent/60" : ""}`}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-bold text-text">{title}</span>
-        {sub && <span className="text-xs text-subtext">{sub}</span>}
+    <div className={cn("eg-card flex flex-col !p-4", accent && "border-accent/40")}>
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
+        <span className="text-sm font-semibold leading-5 text-text">{title}</span>
+        {sub && <span className="text-[11px] leading-5 tabular-nums text-subtext">{sub}</span>}
       </div>
-      <div className="flex items-end gap-4 mt-2">
-        <div>
-          <div className={`text-2xl font-bold ${main > 0 ? (accent ? "text-warning" : "text-text") : "text-subtext"}`}>{fmt(main)}</div>
-          <div className="text-[11px] text-subtext">{mainLabel}</div>
+      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-4">
+        <div className="min-w-0">
+          <div className={cn(
+            "text-2xl font-bold leading-8 tracking-tight tabular-nums",
+            main > 0 ? (accent ? "text-warning" : "text-text") : "text-subtext",
+          )}>
+            {fmt(main)}
+          </div>
+          <div className="text-[11px] leading-4 text-subtext">{mainLabel}</div>
         </div>
         {second !== undefined && (
-          <div className="border-r border-border pr-4">
-            <div className={`text-2xl font-bold ${secondWarn && second > 0 ? "text-danger" : second > 0 ? "text-text" : "text-subtext"}`}>{fmt(second)}</div>
-            <div className="text-[11px] text-subtext">{secondLabel}</div>
+          <div className="flex min-w-0 items-baseline gap-1.5 border-t border-border/70 pt-2 sm:block sm:border-s sm:border-t-0 sm:ps-4 sm:pt-0">
+            <div className={cn(
+              "text-lg font-bold leading-7 tracking-tight tabular-nums sm:text-2xl sm:leading-8",
+              secondWarn && second > 0 ? "text-danger" : second > 0 ? "text-text" : "text-subtext",
+            )}>
+              {fmt(second)}
+            </div>
+            <div className="text-[11px] leading-4 text-subtext">{secondLabel}</div>
           </div>
         )}
       </div>
@@ -524,12 +620,21 @@ function Card({ title, main, mainLabel, second, secondLabel, secondWarn, sub, ac
   );
 }
 
-function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+// خلية أمر الشغل: الرقم + الأولوية + تاريخ التسليم (أحمر لو متأخر)
+function WoCell({ wo, late }: { wo?: WO; late: boolean }) {
   return (
-    <button onClick={onClick}
-      className={`inline-flex items-center gap-1 text-xs px-3 py-2 rounded-lg border transition-colors ${on
-        ? "bg-accent/15 border-accent/60 text-text" : "bg-card2 border-border text-subtext hover:text-text"}`}>
-      {children}{on && <X className="w-3 h-3" />}
-    </button>
+    <>
+      <div className="font-mono text-[13px] font-semibold text-accent">{wo?.wo_number ?? "—"}</div>
+      {(wo?.priority || wo?.expected_delivery) && (
+        <div className="mt-1 flex items-center gap-1.5 whitespace-nowrap">
+          {wo?.priority && <Badge label={wo.priority} dot={false} />}
+          {wo?.expected_delivery && (
+            <span className={cn("text-[11px]", late ? "font-semibold text-danger" : "text-subtext")}>
+              {late ? "متأخر · " : ""}<span className="tabular-nums">{wo.expected_delivery}</span>
+            </span>
+          )}
+        </div>
+      )}
+    </>
   );
 }

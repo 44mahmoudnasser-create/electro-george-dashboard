@@ -1,70 +1,368 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root { direction: rtl; }
+/* ═══════════════════════ Design tokens ═══════════════════════
+   كل لون بيتكتب كـ RGB (من غير rgb()) علشان Tailwind يقدر يضيف الشفافية.
+   التباين متراجع: نص الواجهة كله ≥ 5:1 على كل الأسطح، ونص الأزرار ≥ 4.7:1. */
+@layer base {
+  :root {
+    --bg: 11 13 18;            /* خلفية التطبيق */
+    --card: 18 21 28;          /* الكروت والأسطح */
+    --card2: 24 28 37;         /* الحقول ورؤوس الجداول */
+    --card3: 31 36 48;         /* hover */
+    --border: 38 43 56;
+    --border-strong: 51 58 74;
+    --text: 230 233 240;
+    --subtext: 143 151 171;
+    --muted: 107 115 135;      /* placeholders وعناصر ثانوية جداً */
 
-body {
-  background: #0f1117;
-  color: #e2e8f0;
-  font-family: 'Cairo', sans-serif;
+    --accent: 107 155 250;     /* نصوص وروابط ومؤشرات */
+    --accent-solid: 51 102 238;/* خلفية الأزرار الأساسية */
+    --accent2: 167 139 250;
+    --success: 52 211 153;
+    --success-solid: 4 120 87;
+    --warning: 251 191 36;
+    --warning-solid: 180 83 9;
+    --danger: 248 113 113;
+    --danger-solid: 220 38 38;
+
+    color-scheme: dark;
+    direction: rtl;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-bg font-cairo text-text antialiased;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.3);
+    color: rgb(var(--text));
+  }
+
+  /* مؤشر تركيز واضح لكل العناصر التفاعلية لما التنقل بالكيبورد */
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.75);
+    outline-offset: 2px;
+  }
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+
+  a, button, summary, select, label {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: rgb(var(--accent-solid));
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+  }
+
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* أرقام الأوامر والقطع (WO-2011) والتواريخ (2026-10-23) جوه جملة عربي كانت بتتعرض مقلوبة
+     ("2011- WO" / "23-10-2026")، فبنعزلها عن النص اللي حواليها */
+  .font-mono,
+  .tabular-nums {
+    unicode-bidi: isolate;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="month"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  input[type="month"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+  }
+
+  input[type="search"]::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+  }
+
+  ::placeholder {
+    color: rgb(var(--muted));
+    opacity: 1;
+  }
+
+  summary {
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border-strong)) transparent;
+  }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #1a1d27; }
-::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #3b82f6; }
+/* ═══════════════════════ Components ═══════════════════════ */
+@layer components {
+  /* ── الأسطح ── */
+  .eg-card {
+    @apply rounded-xl border border-border/70 bg-card p-5 shadow-card;
+  }
 
-/* Table */
-.eg-table { @apply w-full border-collapse text-sm; }
-.eg-table th { @apply bg-[#2d3148] text-[#94a3b8] font-semibold px-4 py-3 text-right border-b border-[#2d3148]; }
-.eg-table td { @apply px-4 py-3 border-b border-[#2d3148]/50 text-right; }
-.eg-table tr:hover td { @apply bg-[#222536]; }
+  /* ── الأزرار ──
+     eg-btn-primary: الإجراء الأساسي · eg-btn-ghost: ثانوي · eg-btn-subtle: ثالثي (نص بس)
+     eg-btn-success / eg-btn-danger: حفظ وتأكيد / حذف · eg-btn-danger-soft: حذف أقل حدة
+     المقاسات: eg-btn-sm · eg-btn-xs · eg-btn-icon */
+  .eg-btn {
+    @apply relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-lg
+           border border-transparent px-4 py-2 text-sm font-medium leading-5
+           transition-[background-color,border-color,color,box-shadow,transform,filter,opacity] duration-150 ease-out
+           active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100;
+  }
+  .eg-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgb(var(--bg)), 0 0 0 4px rgb(var(--accent) / 0.7);
+  }
+  .eg-btn-primary {
+    @apply eg-btn bg-accent-solid text-white shadow-button hover:brightness-110;
+  }
+  .eg-btn-success {
+    @apply eg-btn bg-success-solid text-white shadow-button hover:brightness-110;
+  }
+  .eg-btn-danger {
+    @apply eg-btn bg-danger-solid text-white shadow-button hover:brightness-110;
+  }
+  .eg-btn-ghost {
+    @apply eg-btn border-border bg-card2 text-text hover:border-border-strong hover:bg-card3;
+  }
+  .eg-btn-subtle {
+    @apply eg-btn text-subtext hover:bg-card2 hover:text-text;
+  }
+  .eg-btn-danger-soft {
+    @apply eg-btn border-danger/25 bg-danger/10 text-danger hover:border-danger/40 hover:bg-danger/15;
+  }
+  .eg-btn-sm {
+    @apply gap-1.5 rounded-md px-3 py-1.5 text-xs leading-4;
+  }
+  .eg-btn-xs {
+    @apply gap-1 rounded-md px-2 py-1 text-[11px] leading-4;
+  }
+  /* زرار أيقونة مربع (العرض = الارتفاع لكل مقاس) */
+  .eg-btn-icon {
+    padding-left: 0;
+    padding-right: 0;
+    width: 2.375rem;
+  }
+  .eg-btn-icon.eg-btn-sm {
+    width: 1.875rem;
+  }
+  .eg-btn-icon.eg-btn-xs {
+    width: 1.625rem;
+  }
 
-/* Card */
-.eg-card { @apply bg-[#1a1d27] rounded-xl border border-[#2d3148]/50 p-5; }
+  /* أيقونة زرار جوه جدول أو صف (تعديل / حذف ...) */
+  .eg-icon-btn {
+    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-md text-subtext
+           transition-colors duration-150 hover:bg-card3 hover:text-text
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .eg-icon-btn-danger {
+    @apply eg-icon-btn hover:bg-danger/10 hover:text-danger;
+  }
 
-/* Badge */
-.eg-badge { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium; }
+  /* رابط نصي */
+  .eg-link {
+    @apply font-medium text-accent underline-offset-4 transition-colors hover:underline;
+  }
 
-/* Input */
-.eg-input {
-  @apply w-full bg-[#222536] border border-[#2d3148] rounded-lg px-3 py-2.5
-         text-[#e2e8f0] placeholder-[#94a3b8] focus:outline-none
-         focus:border-[#3b82f6] focus:ring-1 focus:ring-[#3b82f6]/30
-         transition text-sm;
+  /* ── الحقول ── */
+  .eg-input {
+    @apply block w-full rounded-lg border border-border bg-card2/70 px-3 py-2 text-sm leading-5 text-text
+           shadow-[inset_0_1px_1px_rgb(0_0_0/0.25)]
+           transition-[border-color,box-shadow,background-color] duration-150
+           hover:border-border-strong
+           focus:border-accent/70 focus:bg-card2 focus:outline-none focus:ring-[3px] focus:ring-accent/20
+           disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  /* السهم على الشمال (نهاية السطر في RTL) علشان يبان إنها قائمة اختيار */
+  .eg-select {
+    @apply eg-input cursor-pointer appearance-none bg-no-repeat;
+    padding-left: 2rem;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238f97ab' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpath d='m6 9 6 6 6-6'/%3e%3c/svg%3e");
+    background-position: left 0.6rem center;
+    background-size: 14px 14px;
+  }
+  .eg-input-sm {
+    @apply rounded-md px-2.5 py-1.5 text-xs leading-4;
+  }
+  .eg-select.eg-input-sm {
+    padding-left: 1.75rem;
+    background-position: left 0.45rem center;
+    background-size: 12px 12px;
+  }
+  .eg-label {
+    @apply mb-1.5 block text-xs font-medium text-subtext;
+  }
+  .eg-hint {
+    @apply mt-1 text-[11px] leading-4 text-muted;
+  }
+  .eg-error {
+    @apply mt-1 text-xs text-danger;
+  }
+
+  /* ── الجداول ──
+     القيم الافتراضية بـ :where علشان أي class على الخلية (text-center, px-2 ...) يكسبها. */
+  .eg-table {
+    @apply w-full border-collapse text-[13px];
+  }
+  :where(.eg-table) th {
+    @apply whitespace-nowrap border-b border-border bg-card2/70 px-3 py-2.5 text-start text-xs font-semibold text-subtext;
+  }
+  :where(.eg-table) td {
+    @apply border-b border-border/50 px-3 py-2.5 align-middle;
+  }
+  /* الخلايا positioned علشان أي عنصر absolute جواها (زي sr-only) يفضل محصور في الجدول
+     وماياخدش الصفحة كلها scroll أفقي لما الجدول يكون أعرض من الشاشة */
+  :where(.eg-table) th,
+  :where(.eg-table) td {
+    position: relative;
+  }
+  /* الأرقام والتواريخ ماتتكسرش على سطرين (التاريخ 2026-10-08 كان بيتقسم عند الشرطة) */
+  :where(.eg-table td.tabular-nums, .eg-table td.font-mono) {
+    white-space: nowrap;
+  }
+  :where(.eg-table) tbody tr:last-child > td {
+    @apply border-b-0;
+  }
+  :where(.eg-table) tbody tr > td {
+    transition: background-color 0.12s ease-out;
+  }
+  :where(.eg-table) tbody tr:hover > td {
+    background-color: rgb(var(--card2) / 0.55);
+  }
+  :where(.eg-table-compact) th {
+    @apply py-2;
+  }
+  :where(.eg-table-compact) td {
+    @apply py-1.5;
+  }
+
+  /* ── الشارات ── */
+  .eg-badge {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-medium leading-5 ring-1 ring-inset;
+  }
+  .tone-neutral { @apply bg-card3/70 text-subtext ring-border; }
+  .tone-accent  { @apply bg-accent/10 text-accent ring-accent/25; }
+  .tone-success { @apply bg-success/10 text-success ring-success/25; }
+  .tone-warning { @apply bg-warning/10 text-warning ring-warning/25; }
+  .tone-danger  { @apply bg-danger/10 text-danger ring-danger/25; }
+  .tone-violet  { @apply bg-accent2/10 text-accent2 ring-accent2/25; }
+
+  /* ── فلاتر (chips) ── */
+  .eg-chip {
+    @apply inline-flex select-none items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-card2/60 px-2.5 py-1
+           text-xs text-subtext transition-colors duration-150 hover:border-border-strong hover:text-text;
+  }
+  .eg-chip-active {
+    @apply border-accent/50 bg-accent/10 font-semibold text-accent hover:border-accent/60 hover:text-accent;
+  }
+
+  /* ── Skeleton ── */
+  .eg-skeleton {
+    @apply relative overflow-hidden rounded-md bg-card2;
+  }
+  .eg-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(100%);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.045), transparent);
+    animation: eg-shimmer 1.5s ease-in-out infinite;
+  }
+
+  /* ── دخول متتابع للعناصر (كروت المؤشرات مثلاً) ── */
+  .eg-stagger > * {
+    animation: eg-fade-up 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  }
+  .eg-stagger > *:nth-child(2) { animation-delay: 35ms; }
+  .eg-stagger > *:nth-child(3) { animation-delay: 70ms; }
+  .eg-stagger > *:nth-child(4) { animation-delay: 105ms; }
+  .eg-stagger > *:nth-child(5) { animation-delay: 140ms; }
+  .eg-stagger > *:nth-child(6) { animation-delay: 175ms; }
+  .eg-stagger > *:nth-child(7) { animation-delay: 210ms; }
+  .eg-stagger > *:nth-child(n + 8) { animation-delay: 245ms; }
+
+  /* شريط تقدم بيكبر من البداية (اليمين) */
+  .eg-grow {
+    transform-origin: right;
+    animation: eg-grow 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  }
 }
-.eg-select {
-  @apply eg-input appearance-none cursor-pointer;
-}
-.eg-label { @apply block text-xs font-medium text-[#94a3b8] mb-1.5; }
 
-/* Button */
-.eg-btn {
-  @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium
-         text-sm transition-all cursor-pointer disabled:opacity-50;
+/* ═══════════════════════ Keyframes ═══════════════════════ */
+@keyframes eg-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes eg-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes eg-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
-.eg-btn-primary { @apply eg-btn bg-[#3b82f6] text-white hover:bg-[#2563eb]; }
-.eg-btn-success { @apply eg-btn bg-[#10b981] text-white hover:bg-[#059669]; }
-.eg-btn-danger  { @apply eg-btn bg-[#ef4444] text-white hover:bg-[#dc2626]; }
-.eg-btn-ghost   { @apply eg-btn bg-[#2d3148]/50 text-[#e2e8f0] hover:bg-[#2d3148]; }
+@keyframes eg-scale-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes eg-scale-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px) scale(0.97); }
+}
+@keyframes eg-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+@keyframes eg-sheet-down {
+  from { transform: none; }
+  to { transform: translateY(100%); }
+}
+@keyframes eg-toast-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes eg-toast-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+@keyframes eg-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes eg-shimmer {
+  100% { transform: translateX(-100%); }
+}
+@keyframes eg-grow {
+  from { transform: scaleX(0); }
+  to { transform: none; }
+}
 
-/* Modal backdrop */
-.eg-modal-backdrop {
-  @apply fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4;
-}
-.eg-modal {
-  @apply bg-[#1a1d27] rounded-2xl border border-[#2d3148] w-full max-w-lg max-h-[90vh]
-         overflow-y-auto shadow-2xl;
-}
-
-/* Mobile nav */
-@media (max-width: 768px) {
-  .sidebar-desktop { display: none; }
-  .bottomnav { display: flex; }
-}
-@media (min-width: 769px) {
-  .bottomnav { display: none; }
+/* احترام إعداد "تقليل الحركة" في نظام التشغيل */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

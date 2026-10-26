@@ -1,22 +1,26 @@
 "use client";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { today, cn } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { Plus, Search, ArrowUpDown, ChevronLeft, X } from "lucide-react";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { FilterChip, ChipRow, SearchInput } from "@/components/ui/Filters";
+import { Plus, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ClipboardList, EyeOff } from "lucide-react";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"] as const;
 const DONE = ["مكتمل", "تم التسليم"];
-const PRIORITY_STYLE: Record<string, string> = {
-  "عاجلة": "bg-danger/15 text-danger",
-  "عالية": "bg-warning/15 text-warning",
-  "متوسطة": "bg-accent/15 text-accent",
-  "منخفضة": "bg-card2 text-subtext",
-};
+const CHECKS = [
+  { key: "chk_client", label: "استلمه العميل" },
+  { key: "chk_quality", label: "استلمته الجودة" },
+  { key: "chk_assembly", label: "التجميع الكهربي" },
+] as const;
 
 type WO = {
   id: number; wo_number: string; status: string; description: string | null;
@@ -75,13 +79,19 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wos, search, filterStatus, filterPriority, hideDone, sortCol, sortDir, todayStr]);
 
+  const filtersActive = !!search || filterStatus !== "الكل" || filterPriority !== "الكل" || hideDone;
+  const clearFilters = () => { setSearch(""); setFilterStatus("الكل"); setFilterPriority("الكل"); setHideDone(false); };
+
   const toggleSort = (col: SortCol) => {
     if (sortCol === col) setSortDir(d => (d === "asc" ? "desc" : "asc"));
     else { setSortCol(col); setSortDir("asc"); }
   };
 
-  const addWO = async () => {
-    if (!form.wo_number.trim()) return;
+  const closeAdd = () => { setAddOpen(false); setError(""); };
+
+  const addWO = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!form.wo_number.trim() || saving) return;
     setSaving(true); setError("");
     let newId: number | null = null;
     if (isDesign) {
@@ -123,193 +133,183 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
     router.push(`${pathname}/${newId}`);
   };
 
-  const SortTh = ({ col, label, className }: { col: SortCol; label: string; className?: string }) => (
-    <th className={cn("px-3 py-2 font-semibold cursor-pointer select-none whitespace-nowrap", className)}
-      onClick={() => toggleSort(col)}>
-      <span className="inline-flex items-center gap-1">
-        {label}
-        <ArrowUpDown className={cn("w-3 h-3", sortCol === col ? "text-accent" : "opacity-40")} />
-      </span>
-    </th>
-  );
+  const sortProps = { sortCol, sortDir, onSort: toggleSort };
 
   return (
-    <div className="max-w-7xl mx-auto">
-      {/* شريط علوي ثابت */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3 space-y-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold text-text">أوامر الشغل</h1>
-            <span className="text-xs text-subtext tabular-nums">{visible.length} / {wos.length}</span>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative">
-              <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtext" />
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                className="eg-input !py-1.5 !text-xs pr-8 w-48" placeholder="بحث برقم الأمر أو الوصف" />
-            </div>
-            <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
-              className="eg-select !py-1.5 !text-xs w-32">
-              <option value="الكل">كل الأولويات</option>
-              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-            </select>
-            <button onClick={() => setHideDone(v => !v)}
-              className={cn("px-3 py-1.5 rounded-md border text-xs transition-colors",
-                hideDone ? "bg-accent/15 border-accent/60 text-accent" : "bg-card2 border-border text-subtext hover:text-text")}>
-              إخفاء المنتهي
+    <Page width="7xl">
+      <PageHeader
+        title="أوامر الشغل"
+        icon={ClipboardList}
+        subtitle={<span className="tabular-nums">{visible.length === wos.length ? `${wos.length} أمر` : `${visible.length} من ${wos.length} أمر`}</span>}
+        actions={<>
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالرقم أو العميل أو الوصف" className="w-full sm:w-60" />
+          <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
+            aria-label="الأولوية" className="eg-select eg-input-sm w-36">
+            <option value="الكل">كل الأولويات</option>
+            {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+          </select>
+          {canCreate && (
+            <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
+              <Plus className="size-3.5" />أمر شغل جديد
             </button>
-            {canCreate && (
-              <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
-                <Plus className="w-3.5 h-3.5" />أمر شغل جديد
-              </button>
-            )}
-          </div>
-        </div>
-
+          )}
+        </>}
+      >
         {/* فلتر الحالات بعدادات */}
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-          {[
-            { key: "الكل", label: "الكل", n: counts.all },
-            ...STATUSES.map(s => ({ key: s, label: s, n: counts[s] ?? 0 })),
-            { key: "متأخر", label: "متأخر", n: counts.late, warn: true },
-          ].map(({ key, label, n, warn }) => {
-            const active = filterStatus === key;
-            return (
-              <button key={key} onClick={() => setFilterStatus(key)}
-                className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap border transition-colors",
-                  active ? "bg-accent/15 border-accent/60 text-accent font-semibold"
-                    : "bg-card2 border-border text-subtext hover:text-text")}>
-                {label}
-                <span className={cn("tabular-nums text-[11px]", warn && n > 0 ? "text-danger" : "opacity-70")}>{n}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+        <ChipRow>
+          <FilterChip active={filterStatus === "الكل"} onClick={() => setFilterStatus("الكل")} count={counts.all}>الكل</FilterChip>
+          {STATUSES.map(s => (
+            <FilterChip key={s} active={filterStatus === s} onClick={() => setFilterStatus(s)} count={counts[s] ?? 0}>{s}</FilterChip>
+          ))}
+          <FilterChip active={filterStatus === "متأخر"} onClick={() => setFilterStatus("متأخر")} count={counts.late} tone="danger">متأخر</FilterChip>
+          <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
+          <FilterChip active={hideDone} onClick={() => setHideDone(v => !v)}>
+            <EyeOff className="size-3.5" />إخفاء المنتهي
+          </FilterChip>
+        </ChipRow>
+      </PageHeader>
 
-      <div className="p-4 md:p-6">
-        <div className="eg-card !p-0 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse min-w-[860px]">
-              <thead>
-                <tr className="bg-card2 text-subtext">
-                  <SortTh col="wo_number" label="رقم الأمر" className="text-right" />
-                  <SortTh col="status" label="الحالة" className="text-right" />
-                  <th className="px-3 py-2 text-right font-semibold">الأولوية</th>
-                  <th className="px-3 py-2 text-right font-semibold">شهر الخطة</th>
-                  <SortTh col="created_date" label="الإنشاء" className="text-right" />
-                  <SortTh col="expected_delivery" label="التسليم المتوقع" className="text-right" />
-                  <SortTh col="completion_date" label="الإتمام" className="text-right" />
-                  <th className="px-3 py-2 text-center font-semibold">التحقق</th>
-                  <th className="w-8" />
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map(w => {
-                  const late = isLate(w);
-                  return (
-                    <tr key={w.id} onClick={() => router.push(`${pathname}/${w.id}`)}
-                      className="border-t border-border/40 cursor-pointer hover:bg-card2/50 group">
-                      <td className="px-3 py-2 max-w-[320px]">
-                        <div className="font-mono font-semibold text-accent">{w.wo_number}</div>
-                        {(w.client_name || w.project_name) && (
-                          <div className="text-[11px] text-subtext truncate">{[w.client_name, w.project_name].filter(Boolean).join(" · ")}</div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2"><Badge label={w.status} /></td>
-                      <td className="px-3 py-2">
-                        {w.priority ? (
-                          <span className={cn("px-1.5 py-0.5 rounded text-[11px]", PRIORITY_STYLE[w.priority] ?? PRIORITY_STYLE["منخفضة"])}>
-                            {w.priority}
-                          </span>
-                        ) : <span className="text-subtext">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-subtext tabular-nums">{w.plan_month ?? "—"}</td>
-                      <td className="px-3 py-2 text-subtext tabular-nums">{w.created_date ?? "—"}</td>
-                      <td className={cn("px-3 py-2 tabular-nums", late ? "text-danger font-semibold" : "text-subtext")}>
-                        {w.expected_delivery ?? "—"}{late && <span className="mr-1 text-[10px]">· متأخر</span>}
-                      </td>
-                      <td className="px-3 py-2 text-subtext tabular-nums">{w.completion_date ?? "—"}</td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center justify-center gap-1" title="استلم العميل · الجودة · التجميع الكهربي">
-                          <Dot on={!!w.chk_client} />
-                          <Dot on={!!w.chk_quality} />
-                          <Dot on={!!w.chk_assembly} />
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 text-subtext group-hover:text-accent">
-                        <ChevronLeft className="w-4 h-4" />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {visible.length === 0 && <EmptyState message="لا توجد أوامر شغل مطابقة للفلتر" />}
+      <PageBody>
+        <div className="eg-card overflow-hidden !p-0">
+          {visible.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="eg-table min-w-[880px]">
+                <thead>
+                  <tr>
+                    <SortHeader col="wo_number" label="رقم الأمر" {...sortProps} />
+                    <SortHeader col="status" label="الحالة" {...sortProps} />
+                    <th>الأولوية</th>
+                    <th>شهر الخطة</th>
+                    <SortHeader col="created_date" label="الإنشاء" {...sortProps} />
+                    <SortHeader col="expected_delivery" label="التسليم المتوقع" {...sortProps} />
+                    <SortHeader col="completion_date" label="الإتمام" {...sortProps} />
+                    <th className="text-center">التحقق</th>
+                    <th className="w-10"><span className="sr-only">فتح</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map(w => {
+                    const late = isLate(w);
+                    const href = `${pathname}/${w.id}`;
+                    return (
+                      <tr key={w.id} onClick={() => router.push(href)} className="group cursor-pointer">
+                        <td className="max-w-[320px]">
+                          <Link href={href} onClick={e => e.stopPropagation()}
+                            className="font-mono text-[13px] font-semibold text-accent underline-offset-4 hover:underline">
+                            {w.wo_number}
+                          </Link>
+                          {(w.client_name || w.project_name) && (
+                            <div className="truncate text-[11px] text-subtext">{[w.client_name, w.project_name].filter(Boolean).join(" · ")}</div>
+                          )}
+                        </td>
+                        <td><Badge label={w.status} /></td>
+                        <td>{w.priority ? <Badge label={w.priority} dot={false} /> : <span className="text-muted">—</span>}</td>
+                        <td className="tabular-nums text-subtext">{w.plan_month ?? "—"}</td>
+                        <td className="tabular-nums text-subtext">{w.created_date ?? "—"}</td>
+                        <td className={cn("tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
+                          {w.expected_delivery ?? "—"}
+                          {late && <span className="mr-1.5 rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium">متأخر</span>}
+                        </td>
+                        <td className="tabular-nums text-subtext">{w.completion_date ?? "—"}</td>
+                        <td>
+                          <div className="flex items-center justify-center gap-1.5">
+                            {CHECKS.map(c => {
+                              const on = !!w[c.key];
+                              return (
+                                <span key={c.key} title={`${c.label}: ${on ? "تم" : "لسه"}`} aria-label={`${c.label}: ${on ? "تم" : "لسه"}`}
+                                  className={cn("size-2 rounded-full", on ? "bg-success" : "bg-border-strong")} />
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td className="text-muted transition-colors group-hover:text-accent">
+                          <ChevronLeft className="size-4 transition-transform duration-150 group-hover:-translate-x-0.5" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              message={wos.length ? "لا توجد أوامر شغل مطابقة للفلتر" : "لسه مفيش أوامر شغل"}
+              description={wos.length ? "غيّر الفلاتر أو امسح البحث علشان تشوف باقي الأوامر." : canCreate ? "ابدأ بإضافة أول أمر شغل." : undefined}
+              action={wos.length && filtersActive
+                ? <button onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+                : !wos.length && canCreate
+                  ? <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm"><Plus className="size-3.5" />أمر شغل جديد</button>
+                  : undefined}
+            />
+          )}
         </div>
-      </div>
+      </PageBody>
 
       {/* مودال الإضافة */}
-      <Modal open={addOpen} onClose={() => { setAddOpen(false); setError(""); }} title="أمر شغل جديد">
-        <div className="space-y-4">
-          <div>
-            <label className="eg-label">رقم أمر الشغل *</label>
+      <Modal open={addOpen} onClose={closeAdd} title="أمر شغل جديد" description="بعد الحفظ هيتفتح الأمر علشان تكمّل بنوده.">
+        <form onSubmit={addWO} className="space-y-4">
+          <Field label="رقم أمر الشغل" required>
             <input value={form.wo_number} onChange={e => setForm(f => ({ ...f, wo_number: e.target.value }))}
-              className="eg-input font-mono" placeholder="مثال: WO-2026-001" />
-          </div>
+              className="eg-input font-mono" placeholder="مثال: WO-2026-001" autoFocus dir="ltr" />
+          </Field>
           {!isDesignOnly && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="eg-label">الحالة</label>
-              <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="eg-select">
-                {STATUSES.map(s => <option key={s}>{s}</option>)}
-              </select>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="الحالة">
+                <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="eg-select">
+                  {STATUSES.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+              <Field label="الأولوية">
+                <select value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} className="eg-select">
+                  {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </Field>
+              <Field label="التسليم المتوقع">
+                <input type="date" value={form.expected_delivery}
+                  onChange={e => setForm(f => ({ ...f, expected_delivery: e.target.value }))} className="eg-input" />
+              </Field>
+              <Field label="شهر الخطة">
+                <input type="month" value={form.plan_month}
+                  onChange={e => setForm(f => ({ ...f, plan_month: e.target.value }))} className="eg-input" />
+              </Field>
             </div>
-            <div>
-              <label className="eg-label">الأولوية</label>
-              <select value={form.priority} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))} className="eg-select">
-                {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="eg-label">التسليم المتوقع</label>
-              <input type="date" value={form.expected_delivery}
-                onChange={e => setForm(f => ({ ...f, expected_delivery: e.target.value }))} className="eg-input" />
-            </div>
-            <div>
-              <label className="eg-label">شهر الخطة</label>
-              <input type="month" value={form.plan_month}
-                onChange={e => setForm(f => ({ ...f, plan_month: e.target.value }))} className="eg-input" />
-            </div>
-          </div>
           )}
-          <div>
-            <label className="eg-label">الوصف</label>
+          <Field label="الوصف">
             <textarea rows={3} value={form.description}
               onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              className="eg-input !h-auto py-2" placeholder="وصف مختصر لأمر الشغل (المنتج، المطلوب، ملاحظات...)" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="eg-label">اسم العميل</label>
+              className="eg-input resize-y" placeholder="وصف مختصر لأمر الشغل (المنتج، المطلوب، ملاحظات...)" />
+          </Field>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="اسم العميل">
               <input value={form.client_name} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))} className="eg-input" />
-            </div>
-            <div>
-              <label className="eg-label">اسم المشروع</label>
+            </Field>
+            <Field label="اسم المشروع">
               <input value={form.project_name} onChange={e => setForm(f => ({ ...f, project_name: e.target.value }))} className="eg-input" />
-            </div>
+            </Field>
           </div>
-          {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={addWO} disabled={saving || !form.wo_number.trim()} className="eg-btn-primary w-full justify-center">
+          <FormError>{error}</FormError>
+          <button type="submit" disabled={saving || !form.wo_number.trim()} className="eg-btn-primary w-full">
+            {saving && <Spinner />}
             {saving ? "جاري الحفظ..." : "حفظ وفتح الأمر"}
           </button>
-        </div>
+        </form>
       </Modal>
-    </div>
+    </Page>
   );
 }
 
-function Dot({ on }: { on: boolean }) {
-  return <span className={cn("w-2 h-2 rounded-full", on ? "bg-success" : "bg-border")} />;
+function SortHeader({ col, label, sortCol, sortDir, onSort, className }: {
+  col: SortCol; label: string; sortCol: SortCol; sortDir: "asc" | "desc"; onSort: (c: SortCol) => void; className?: string;
+}) {
+  const active = sortCol === col;
+  const Icon = !active ? ArrowUpDown : sortDir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th className={className} aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => onSort(col)}
+        className={cn("inline-flex items-center gap-1 rounded transition-colors hover:text-text", active && "text-text")}>
+        {label}
+        <Icon className={cn("size-3", active ? "text-accent" : "opacity-40")} />
+      </button>
+    </th>
+  );
 }

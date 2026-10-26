@@ -1,6 +1,10 @@
 "use client";
 import { useState } from "react";
+import { KeyRound } from "lucide-react";
 import Modal from "@/components/ui/Modal";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 import { supabase } from "@/lib/supabase";
 
 const MIN_LENGTH = 8;
@@ -12,21 +16,23 @@ export default function ChangePasswordModal({
   onClose: () => void;
   email: string | null;
 }) {
+  const toast = useToast();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [done, setDone] = useState(false);
 
   const reset = () => {
     setCurrent(""); setNext(""); setConfirm("");
-    setError(""); setDone(false); setBusy(false);
+    setError(""); setBusy(false);
   };
 
   const close = () => { reset(); onClose(); };
 
-  const submit = async () => {
+  const submit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
     setError("");
     if (!email) { setError("مش لاقي الإيميل بتاعك"); return; }
     if (!current) { setError("اكتب كلمة المرور الحالية"); return; }
@@ -43,38 +49,31 @@ export default function ChangePasswordModal({
     setBusy(false);
     if (updErr) { setError(updErr.message); return; }
 
-    setDone(true);
-    setTimeout(close, 1500);
+    toast.success("تم تغيير كلمة المرور بنجاح");
+    close();
   };
 
   return (
-    <Modal open={open} onClose={close} title="تغيير كلمة المرور" size="sm">
-      {done ? (
-        <p className="text-sm text-success text-center py-4">تم تغيير كلمة المرور بنجاح ✓</p>
-      ) : (
-        <div className="space-y-3">
-          <div>
-            <label className="eg-label">كلمة المرور الحالية</label>
-            <input type="password" autoComplete="current-password" value={current}
-              onChange={e => setCurrent(e.target.value)} className="eg-input" />
-          </div>
-          <div>
-            <label className="eg-label">كلمة المرور الجديدة</label>
-            <input type="password" autoComplete="new-password" value={next}
-              onChange={e => setNext(e.target.value)} className="eg-input" placeholder={`${MIN_LENGTH} حروف على الأقل`} />
-          </div>
-          <div>
-            <label className="eg-label">تأكيد كلمة المرور الجديدة</label>
-            <input type="password" autoComplete="new-password" value={confirm}
-              onChange={e => setConfirm(e.target.value)} className="eg-input"
-              onKeyDown={e => e.key === "Enter" && submit()} />
-          </div>
-          {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={submit} disabled={busy} className="eg-btn-primary w-full justify-center">
-            {busy ? "جاري التغيير..." : "تغيير كلمة المرور"}
-          </button>
-        </div>
-      )}
+    <Modal open={open} onClose={close} title="تغيير كلمة المرور" description="للحماية، اكتب كلمة المرور الحالية الأول." size="sm">
+      <form onSubmit={submit} className="space-y-4">
+        <Field label="كلمة المرور الحالية">
+          <input type="password" autoComplete="current-password" value={current} autoFocus
+            onChange={e => setCurrent(e.target.value)} className="eg-input" dir="ltr" />
+        </Field>
+        <Field label="كلمة المرور الجديدة" hint={`${MIN_LENGTH} حروف على الأقل`}>
+          <input type="password" autoComplete="new-password" value={next}
+            onChange={e => setNext(e.target.value)} className="eg-input" dir="ltr" />
+        </Field>
+        <Field label="تأكيد كلمة المرور الجديدة">
+          <input type="password" autoComplete="new-password" value={confirm}
+            onChange={e => setConfirm(e.target.value)} className="eg-input" dir="ltr" />
+        </Field>
+        <FormError>{error}</FormError>
+        <button type="submit" disabled={busy} className="eg-btn-primary w-full">
+          {busy ? <Spinner /> : <KeyRound className="size-4" />}
+          {busy ? "جاري التغيير..." : "تغيير كلمة المرور"}
+        </button>
+      </form>
     </Modal>
   );
 }

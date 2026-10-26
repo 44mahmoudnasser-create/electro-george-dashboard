@@ -1,10 +1,18 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { Plus, Trash2, Search } from "lucide-react";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { StatCard } from "@/components/ui/StatCard";
+import { SearchInput } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Plus, Trash2, AlertTriangle } from "lucide-react";
 import { today } from "@/lib/utils";
 
 type Violation = {
@@ -19,11 +27,13 @@ export default function ViolationsClient({
   technicians: { id: number; name: string }[];
   role: string;
 }) {
-  const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
   const [violations, setViolations] = useState<Violation[]>(initialViolations);
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [form, setForm] = useState({ tech_id: "", date: today(), reason: "", details: "" });
 
   const filtered = violations.filter(v =>
@@ -32,9 +42,10 @@ export default function ViolationsClient({
     (v.reason ?? "").includes(search)
   );
 
-  const addViolation = async () => {
-    if (!form.tech_id || !form.reason.trim()) return;
-    setSaving(true);
+  const addViolation = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!form.tech_id || !form.reason.trim() || saving) return;
+    setSaving(true); setError("");
     const { data, error } = await supabase.from("violations").insert({
       tech_id: parseInt(form.tech_id),
       date: form.date || today(),
@@ -42,118 +53,120 @@ export default function ViolationsClient({
       details: form.details,
     }).select("*, technician:technicians(id, name)").single();
     setSaving(false);
-    if (error) { alert(error.message); return; }
+    if (error) { setError(error.message); return; }
     setViolations(prev => [data, ...prev]);
     setAddOpen(false);
     setForm({ tech_id: "", date: today(), reason: "", details: "" });
+    toast.success("تم تسجيل المخالفة");
   };
 
-  const deleteViolation = async (id: number) => {
-    if (!confirm("حذف هذه المخالفة؟")) return;
-    await supabase.from("violations").delete().eq("id", id);
-    setViolations(prev => prev.filter(v => v.id !== id));
+  const deleteViolation = async (v: Violation) => {
+    const ok = await confirm({
+      title: "حذف المخالفة؟",
+      message: <>هتتحذف مخالفة <span className="font-semibold text-text">{v.technician?.name ?? "الفني"}</span>{v.date && <> بتاريخ <span className="tabular-nums">{v.date}</span></>}.</>,
+      confirmText: "حذف المخالفة",
+    });
+    if (!ok) return;
+    const { error } = await supabase.from("violations").delete().eq("id", v.id);
+    if (error) { toast.error(error.message); return; }
+    setViolations(prev => prev.filter(x => x.id !== v.id));
+    toast.success("تم حذف المخالفة");
   };
+
+  const thisMonth = today().slice(0, 7);
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-xl font-bold text-text">⚠️ المخالفات</h1>
-        {true && (
-          <button onClick={() => setAddOpen(true)} className="eg-btn-danger">
-            <Plus className="w-4 h-4" />تسجيل مخالفة
+    <Page width="5xl">
+      <PageHeader
+        title="المخالفات"
+        icon={AlertTriangle}
+        subtitle={`${violations.length} مخالفة مسجلة`}
+        actions={<>
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو السبب" className="w-full sm:w-56" />
+          <button onClick={() => setAddOpen(true)} className="eg-btn-danger eg-btn-sm">
+            <Plus className="size-3.5" />تسجيل مخالفة
           </button>
-        )}
-      </div>
+        </>}
+      />
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {[
-          { label: "إجمالي المخالفات", value: violations.length, color: "text-danger" },
-          { label: "هذا الشهر", value: violations.filter(v => v.date?.startsWith(today().slice(0,7))).length, color: "text-warning" },
-          { label: "فنيين متكررين", value: new Set(violations.map(v => v.tech_id)).size, color: "text-subtext" },
-        ].map(s => (
-          <div key={s.label} className="eg-card text-center">
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-xs text-subtext mt-1">{s.label}</p>
-          </div>
-        ))}
-      </div>
+      <PageBody>
+        <div className="eg-stagger grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <StatCard label="إجمالي المخالفات" value={violations.length} tone={violations.length ? "danger" : "muted"} />
+          <StatCard label="هذا الشهر" value={violations.filter(v => v.date?.startsWith(thisMonth)).length} tone="warning" />
+          <StatCard label="فنيين عليهم مخالفات" value={new Set(violations.map(v => v.tech_id)).size} className="col-span-2 sm:col-span-1" />
+        </div>
 
-      {/* Search */}
-      <div className="relative w-56">
-        <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-subtext" />
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          className="eg-input pr-9" placeholder="بحث بالاسم أو السبب" />
-      </div>
+        <div className="eg-card overflow-hidden !p-0">
+          {filtered.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="eg-table min-w-[620px]">
+                <thead>
+                  <tr>
+                    <th>الفني</th><th>التاريخ</th><th>السبب</th><th>التفاصيل</th>
+                    <th className="w-12"><span className="sr-only">إجراءات</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(v => (
+                    <tr key={v.id}>
+                      <td>
+                        {v.technician?.id
+                          ? <Link href={`/technicians/${v.technician.id}`} className="eg-link">{v.technician.name}</Link>
+                          : <span className="text-subtext">—</span>}
+                      </td>
+                      <td className="tabular-nums text-subtext">{v.date ?? "—"}</td>
+                      <td className="text-text">{v.reason ?? "—"}</td>
+                      <td className="max-w-[280px] text-subtext">{v.details || "—"}</td>
+                      <td>
+                        <Tooltip content="حذف">
+                          <button onClick={() => deleteViolation(v)} className="eg-icon-btn-danger" aria-label="حذف المخالفة">
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </Tooltip>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              message={violations.length ? "مفيش مخالفات مطابقة للبحث" : "لا توجد مخالفات"}
+              action={search ? <button onClick={() => setSearch("")} className="eg-btn-ghost eg-btn-sm">مسح البحث</button> : undefined}
+            />
+          )}
+        </div>
+      </PageBody>
 
-      {/* Table */}
-      <div className="eg-card overflow-x-auto">
-        <table className="eg-table">
-          <thead>
-            <tr>
-              <th>الفني</th><th>التاريخ</th><th>السبب</th><th>التفاصيل</th>
-              {true && <th></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(v => (
-              <tr key={v.id}>
-                <td>
-                  <button
-                    onClick={() => router.push(`/technicians/${v.technician?.id}`)}
-                    className="text-accent hover:underline font-medium text-sm">
-                    {v.technician?.name ?? "—"}
-                  </button>
-                </td>
-                <td className="text-subtext">{v.date ?? "—"}</td>
-                <td className="text-text">{v.reason ?? "—"}</td>
-                <td className="text-subtext">{v.details ?? "—"}</td>
-                {true && (
-                  <td>
-                    <button onClick={() => deleteViolation(v.id)}
-                      className="text-danger/50 hover:text-danger transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filtered.length === 0 && <EmptyState message="لا توجد مخالفات" />}
-      </div>
-
-      {/* Add Modal */}
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="تسجيل مخالفة جديدة">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="eg-label">الفني *</label>
+      {/* تسجيل مخالفة */}
+      <Modal open={addOpen} onClose={() => { setAddOpen(false); setError(""); }} title="تسجيل مخالفة جديدة">
+        <form onSubmit={addViolation} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="الفني" required>
               <select value={form.tech_id} onChange={e => setForm(f => ({ ...f, tech_id: e.target.value }))} className="eg-select">
                 <option value="">اختر فني...</option>
                 {technicians.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="eg-label">التاريخ</label>
+            </Field>
+            <Field label="التاريخ">
               <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="eg-input" />
-            </div>
+            </Field>
           </div>
-          <div>
-            <label className="eg-label">السبب *</label>
+          <Field label="السبب" required>
             <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
               className="eg-input" placeholder="مثال: تأخر عن العمل" />
-          </div>
-          <div>
-            <label className="eg-label">التفاصيل</label>
+          </Field>
+          <Field label="التفاصيل">
             <textarea value={form.details} onChange={e => setForm(f => ({ ...f, details: e.target.value }))}
-              className="eg-input resize-none" rows={3} placeholder="تفاصيل إضافية..." />
-          </div>
-          <button onClick={addViolation} disabled={saving} className="eg-btn-danger w-full justify-center">
-            {saving ? "جاري الحفظ..." : "⚠️ تسجيل المخالفة"}
+              className="eg-input resize-y" rows={3} placeholder="تفاصيل إضافية..." />
+          </Field>
+          <FormError>{error}</FormError>
+          <button type="submit" disabled={saving || !form.tech_id || !form.reason.trim()} className="eg-btn-danger w-full">
+            {saving ? <Spinner /> : <AlertTriangle className="size-4" />}
+            {saving ? "جاري الحفظ..." : "تسجيل المخالفة"}
           </button>
-        </div>
+        </form>
       </Modal>
-    </div>
+    </Page>
   );
 }

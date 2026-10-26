@@ -1,7 +1,10 @@
 "use client";
-import { Fragment, useMemo, useState } from "react";
-import { Search, Download, ChevronDown, ChevronUp, Plus, Pencil, Trash2, Activity } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Download, ChevronDown, Plus, Pencil, Trash2, History, X, Code2, CalendarDays, SearchX } from "lucide-react";
 import EmptyState from "@/components/ui/EmptyState";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { StatPill } from "@/components/ui/StatCard";
+import { SearchInput } from "@/components/ui/Filters";
 import { cn } from "@/lib/utils";
 import { deptLabel, initials } from "@/lib/roles";
 
@@ -56,10 +59,11 @@ const FIELD: Record<string, string> = {
 const TECH_FK_TABLES = new Set(["attendance", "permissions", "overtime", "violations", "daily_productivity", "custody"]);
 const SKIP_FIELDS = new Set(["id", "created_at", "updated_at", "created_by", "changed_by", "image_path"]);
 
+// أنواع الإجراءات مش من حالات lib/status — بنلوّنها بكلاسات tone-* الجاهزة (شارة + دايرة الأيقونة)
 const ACTION_STYLE = {
-  INSERT: { label: "إضافة", verb: "أضاف", icon: Plus, cls: "bg-success/15 text-success", dot: "bg-success" },
-  UPDATE: { label: "تعديل", verb: "عدّل", icon: Pencil, cls: "bg-accent/15 text-accent", dot: "bg-accent" },
-  DELETE: { label: "حذف", verb: "حذف", icon: Trash2, cls: "bg-danger/15 text-danger", dot: "bg-danger" },
+  INSERT: { label: "إضافة", verb: "أضاف", icon: Plus, cls: "tone-success" },
+  UPDATE: { label: "تعديل", verb: "عدّل", icon: Pencil, cls: "tone-accent" },
+  DELETE: { label: "حذف", verb: "حذف", icon: Trash2, cls: "tone-danger" },
 } as const;
 
 const fmtValue = (v: any): string => {
@@ -98,6 +102,9 @@ export default function ActivityLogClient({
       d.skill_name ?? d.task ?? d.description ?? d.reason ?? d.permission_type ??
       (d.date ? `بتاريخ ${d.date}` : `#${l.record_id}`);
   };
+
+  // للعرض بس: التاريخ بعد كلمة عربي بيتقلب (23-10-2026)، فبنعزله بعلامات اتجاه مخفية
+  const recordLabelDisplay = (l: LogRow) => recordLabel(l).replace(/(\d{4}-\d{2}-\d{2})/g, "⁦$1⁩");
 
   const tables = useMemo(() => Array.from(new Set(logs.map(l => l.table_name))).sort(), [logs]);
   const users = useMemo(() => Array.from(new Set(logs.map(userName))).sort(), [logs]);
@@ -164,7 +171,7 @@ export default function ActivityLogClient({
       ]);
     });
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url; a.download = `سجل_النشاط_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
@@ -175,90 +182,90 @@ export default function ActivityLogClient({
     setSearch(""); setTableFilter("الكل"); setActionFilter("الكل");
     setDeptFilter("الكل"); setUserFilter("الكل"); setFrom(""); setTo("");
   };
-  const filtersActive = search || tableFilter !== "الكل" || actionFilter !== "الكل" ||
-    deptFilter !== "الكل" || userFilter !== "الكل" || from || to;
+  const filtersActive = !!(search || tableFilter !== "الكل" || actionFilter !== "الكل" ||
+    deptFilter !== "الكل" || userFilter !== "الكل" || from || to);
 
   return (
-    <div className="max-w-5xl mx-auto">
-      {/* ═══ الهيدر الثابت ═══ */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3 space-y-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Activity className="w-5 h-5 text-accent" />
-            <div>
-              <h1 className="text-lg font-bold text-text">سجل النشاط</h1>
-              <p className="text-[11px] text-subtext">آخر {logs.length} حركة على النظام</p>
-            </div>
-          </div>
-          <button onClick={exportCsv} disabled={filtered.length === 0}
-            className="eg-btn-ghost !py-1.5 !text-xs disabled:opacity-40">
-            <Download className="w-3.5 h-3.5" />تصدير CSV
+    <Page width="5xl">
+      <PageHeader
+        title="سجل النشاط"
+        icon={History}
+        subtitle={<span className="tabular-nums">آخر {logs.length} حركة على النظام</span>}
+        actions={
+          <button type="button" onClick={exportCsv} disabled={filtered.length === 0} className="eg-btn-ghost eg-btn-sm">
+            <Download className="size-3.5" />تصدير CSV
           </button>
-        </div>
-
+        }
+      >
         {/* الفلاتر */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtext" />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              className="eg-input !py-1.5 !text-xs pr-8 w-44" placeholder="بحث بالاسم أو السجل" />
-          </div>
-          <select value={userFilter} onChange={e => setUserFilter(e.target.value)} className="eg-select !py-1.5 !text-xs w-36">
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو السجل" className="w-full sm:w-52" />
+          <select value={userFilter} onChange={e => setUserFilter(e.target.value)} aria-label="المستخدم" className="eg-select eg-input-sm w-36">
             <option value="الكل">كل المستخدمين</option>
             {users.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
-          <select value={tableFilter} onChange={e => setTableFilter(e.target.value)} className="eg-select !py-1.5 !text-xs w-36">
+          <select value={tableFilter} onChange={e => setTableFilter(e.target.value)} aria-label="نوع السجل" className="eg-select eg-input-sm w-36">
             <option value="الكل">كل الأنواع</option>
             {tables.map(t => <option key={t} value={t}>{entityName(t)}</option>)}
           </select>
-          <select value={actionFilter} onChange={e => setActionFilter(e.target.value)} className="eg-select !py-1.5 !text-xs w-28">
+          <select value={actionFilter} onChange={e => setActionFilter(e.target.value)} aria-label="الإجراء" className="eg-select eg-input-sm w-32">
             <option value="الكل">كل الإجراءات</option>
             <option value="INSERT">إضافة</option>
             <option value="UPDATE">تعديل</option>
             <option value="DELETE">حذف</option>
           </select>
           {depts.length > 0 && (
-            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="eg-select !py-1.5 !text-xs w-32">
+            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} aria-label="القسم" className="eg-select eg-input-sm w-32">
               <option value="الكل">كل الأقسام</option>
               {depts.map(d => <option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>
           )}
-          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="eg-input !py-1.5 !text-xs w-36" title="من" />
-          <input type="date" value={to} onChange={e => setTo(e.target.value)} className="eg-input !py-1.5 !text-xs w-36" title="إلى" />
+          <div className="flex items-center gap-1.5">
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} aria-label="من" title="من" className="eg-input eg-input-sm w-36" />
+            <span aria-hidden className="text-xs text-muted">—</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} aria-label="إلى" title="إلى" className="eg-input eg-input-sm w-36" />
+          </div>
           {filtersActive && (
-            <button onClick={resetFilters} className="text-xs text-accent hover:underline px-2">مسح الفلاتر</button>
+            <button type="button" onClick={resetFilters} className="eg-btn-subtle eg-btn-xs">
+              <X className="size-3" />مسح الفلاتر
+            </button>
           )}
         </div>
-      </div>
+      </PageHeader>
 
-      <div className="p-4 md:p-6 space-y-4">
+      <PageBody>
         {/* ملخص */}
-        <div className="flex items-center gap-2 flex-wrap text-xs">
-          <span className="inline-flex items-center gap-1.5 bg-card2 rounded-md px-2.5 py-1 border border-border/50">
-            <span className="text-subtext">النتائج</span><span className="font-bold text-text tabular-nums">{filtered.length}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 bg-card2 rounded-md px-2.5 py-1 border border-border/50">
-            <Plus className="w-3 h-3 text-success" /><span className="font-bold text-success tabular-nums">{counts.INSERT}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 bg-card2 rounded-md px-2.5 py-1 border border-border/50">
-            <Pencil className="w-3 h-3 text-accent" /><span className="font-bold text-accent tabular-nums">{counts.UPDATE}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 bg-card2 rounded-md px-2.5 py-1 border border-border/50">
-            <Trash2 className="w-3 h-3 text-danger" /><span className="font-bold text-danger tabular-nums">{counts.DELETE}</span>
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatPill label="النتائج" value={filtered.length} />
+          <StatPill label={ACTION_STYLE.INSERT.label} value={counts.INSERT} tone="success" icon={Plus} />
+          <StatPill label={ACTION_STYLE.UPDATE.label} value={counts.UPDATE} tone="accent" icon={Pencil} />
+          <StatPill label={ACTION_STYLE.DELETE.label} value={counts.DELETE} tone="danger" icon={Trash2} />
         </div>
 
         {/* الخط الزمني */}
         {groups.length === 0 ? (
-          <div className="eg-card"><EmptyState message="مفيش حركات مطابقة للفلاتر" /></div>
+          <div className="eg-card">
+            <EmptyState
+              icon={logs.length ? SearchX : History}
+              message={logs.length ? "مفيش حركات مطابقة للفلاتر" : "لسه مفيش حركات على النظام"}
+              description={logs.length && filtersActive ? "غيّر الفلاتر أو امسح البحث علشان تشوف باقي الحركات." : undefined}
+              action={filtersActive
+                ? <button type="button" onClick={resetFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+                : undefined}
+            />
+          </div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
             {groups.map(([day, list]) => (
-              <section key={day}>
-                <h2 className="text-xs font-semibold text-subtext mb-2 sticky top-[7.5rem] bg-bg/90 py-1 z-[1]">
-                  {dayLabel(day)} <span className="tabular-nums opacity-70">· {list.length}</span>
+              <section key={day} className="space-y-2.5">
+                <h2 className="flex items-center gap-2 px-1 text-sm font-semibold text-text">
+                  <CalendarDays className="size-4 text-muted" />
+                  {dayLabel(day)}
+                  <span className="min-w-[1.25rem] rounded-full bg-card3 px-1.5 text-center text-[11px] font-semibold leading-[18px] text-subtext tabular-nums">
+                    {list.length}
+                  </span>
                 </h2>
-                <div className="eg-card !p-0 overflow-hidden divide-y divide-border/40">
+                <div className="eg-card divide-y divide-border/50 overflow-hidden !p-0">
                   {list.map(l => {
                     const st = ACTION_STYLE[l.action];
                     const Icon = st.icon;
@@ -266,92 +273,99 @@ export default function ActivityLogClient({
                     const diffs = diffOf(l);
                     const time = new Date(l.created_at).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
                     return (
-                      <Fragment key={l.id}>
-                        <button onClick={() => { setExpanded(open ? null : l.id); setShowRaw(false); }}
-                          className="w-full flex items-start gap-3 px-4 py-3 text-right hover:bg-card2/50 transition-colors">
-                          <div className={cn("mt-0.5 w-7 h-7 shrink-0 rounded-full flex items-center justify-center", st.cls)}>
-                            <Icon className="w-3.5 h-3.5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-text leading-relaxed">
+                      <div key={l.id}>
+                        <button type="button" onClick={() => { setExpanded(open ? null : l.id); setShowRaw(false); }}
+                          aria-expanded={open} aria-controls={`log-${l.id}`}
+                          className={cn("flex w-full items-start gap-3 px-4 py-3 text-start transition-colors hover:bg-card2/50", open && "bg-card2/40")}>
+                          <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-inset", st.cls)}>
+                            <Icon className="size-3.5" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="break-words text-sm leading-6 text-text">
                               <span className="font-semibold">{userName(l)}</span>
                               <span className="text-subtext"> {st.verb} {entityName(l.table_name)} </span>
-                              <span className="font-medium">«{recordLabel(l)}»</span>
+                              <span className="font-medium">«{recordLabelDisplay(l)}»</span>
                             </p>
-                            <div className="flex items-center gap-2 mt-1 flex-wrap">
-                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded", st.cls)}>{st.label}</span>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              <span className={cn("eg-badge", st.cls)}>{st.label}</span>
                               {l.department && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-card2 text-subtext">{deptLabel(l.department)}</span>
+                                <span className="eg-badge tone-neutral">{deptLabel(l.department)}</span>
                               )}
                               {l.action === "UPDATE" && diffs.length > 0 && (
-                                <span className="text-[10px] text-subtext">{diffs.length} حقل اتغيّر</span>
+                                <span className="text-[11px] text-subtext">
+                                  <span className="tabular-nums">{diffs.length}</span> حقل اتغيّر
+                                </span>
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0 text-subtext">
+                          <div className="flex shrink-0 items-center gap-2 pt-1 text-subtext">
                             <span className="text-[11px] tabular-nums">{time}</span>
-                            {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            <ChevronDown className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")} />
                           </div>
                         </button>
 
                         {open && (
-                          <div className="px-4 pb-4 pt-1 bg-card2/40 space-y-3">
-                            <div className="flex items-center gap-2 text-[11px] text-subtext">
-                              <span className="w-6 h-6 rounded-full bg-accent/20 text-accent flex items-center justify-center font-bold text-[10px]">
+                          <div id={`log-${l.id}`} className="animate-fade-in space-y-3 bg-card2/40 px-4 pb-4 pt-1 sm:pr-14">
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-subtext">
+                              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent/15 text-[11px] font-bold text-accent">
                                 {initials(l.user?.full_name, l.user?.email)}
                               </span>
-                              <span>{userName(l)}</span>
-                              <span>·</span>
+                              <span className="font-medium text-text">{userName(l)}</span>
+                              <span aria-hidden>·</span>
                               <span className="tabular-nums">{new Date(l.created_at).toLocaleString("ar-EG")}</span>
                             </div>
 
                             {l.action === "UPDATE" && diffs.length > 0 && (
-                              <table className="w-full text-xs border-collapse">
-                                <thead>
-                                  <tr className="text-subtext">
-                                    <th className="py-1 text-right font-semibold w-1/4">الحقل</th>
-                                    <th className="py-1 text-right font-semibold">قبل</th>
-                                    <th className="py-1 text-right font-semibold">بعد</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {diffs.map(d => (
-                                    <tr key={d.key} className="border-t border-border/30">
-                                      <td className="py-1.5 text-subtext">{FIELD[d.key] ?? d.key}</td>
-                                      <td className="py-1.5 text-danger/90 line-through">{fmtValue(d.from)}</td>
-                                      <td className="py-1.5 text-success font-medium">{fmtValue(d.to)}</td>
+                              <div className="overflow-x-auto rounded-lg border border-border/60 bg-card">
+                                <table className="eg-table eg-table-compact">
+                                  <thead>
+                                    <tr>
+                                      <th className="w-1/4">الحقل</th>
+                                      <th>قبل</th>
+                                      <th>بعد</th>
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                                  </thead>
+                                  <tbody>
+                                    {diffs.map(d => (
+                                      <tr key={d.key}>
+                                        <td className="text-subtext">{FIELD[d.key] ?? d.key}</td>
+                                        <td className="text-danger/90 line-through decoration-danger/60 [overflow-wrap:anywhere]">{fmtValue(d.from)}</td>
+                                        <td className="font-medium text-success [overflow-wrap:anywhere]">{fmtValue(d.to)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             )}
 
                             {l.action === "INSERT" && l.new_data && (
-                              <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+                              <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-lg border border-border/60 bg-card p-3 md:grid-cols-3">
                                 {Object.entries(l.new_data).filter(([k]) => !SKIP_FIELDS.has(k)).slice(0, 9).map(([k, v]) => (
-                                  <div key={k}>
-                                    <dt className="text-[10px] text-subtext">{FIELD[k] ?? k}</dt>
-                                    <dd className="text-text truncate">{fmtValue(v)}</dd>
+                                  <div key={k} className="min-w-0">
+                                    <dt className="text-[11px] leading-4 text-subtext">{FIELD[k] ?? k}</dt>
+                                    <dd className="mt-0.5 truncate text-xs text-text" title={fmtValue(v)}>{fmtValue(v)}</dd>
                                   </div>
                                 ))}
                               </dl>
                             )}
 
                             {l.action === "DELETE" && l.old_data && (
-                              <p className="text-xs text-subtext">تم حذف السجل بالكامل. اضغط "عرض البيانات الخام" لشوف محتواه.</p>
+                              <p className="text-xs leading-5 text-subtext">تم حذف السجل بالكامل. اضغط &quot;عرض البيانات الخام&quot; علشان تشوف محتواه.</p>
                             )}
 
-                            <button onClick={() => setShowRaw(v => !v)} className="text-[11px] text-accent hover:underline">
+                            <button type="button" onClick={() => setShowRaw(v => !v)} aria-expanded={showRaw}
+                              className="eg-link inline-flex items-center gap-1 text-xs">
+                              <Code2 className="size-3.5" />
                               {showRaw ? "إخفاء البيانات الخام" : "عرض البيانات الخام"}
                             </button>
                             {showRaw && (
-                              <pre className="text-[10px] text-subtext bg-card rounded-md p-3 overflow-x-auto whitespace-pre-wrap" dir="ltr">
+                              <pre dir="ltr" className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-bg/60 p-3 font-mono text-[11px] leading-5 text-subtext">
                                 {JSON.stringify(l.action === "DELETE" ? l.old_data : l.new_data ?? l.old_data, null, 2)}
                               </pre>
                             )}
                           </div>
                         )}
-                      </Fragment>
+                      </div>
                     );
                   })}
                 </div>
@@ -362,12 +376,14 @@ export default function ActivityLogClient({
 
         {filtered.length > limit && (
           <div className="flex justify-center">
-            <button onClick={() => setLimit(l => l + 100)} className="eg-btn-ghost !py-1.5 !text-xs">
-              عرض المزيد ({filtered.length - limit} متبقي)
+            <button type="button" onClick={() => setLimit(l => l + 100)} className="eg-btn-ghost eg-btn-sm">
+              <ChevronDown className="size-3.5" />
+              عرض المزيد
+              <span className="tabular-nums text-subtext">({filtered.length - limit} متبقي)</span>
             </button>
           </div>
         )}
-      </div>
-    </div>
+      </PageBody>
+    </Page>
   );
 }

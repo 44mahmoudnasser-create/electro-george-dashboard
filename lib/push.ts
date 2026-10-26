@@ -14,8 +14,7 @@ function urlBase64ToUint8Array(base64String: string) {
 
 export async function subscribeToPush(userId: string) {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    alert("المتصفح ده مش بيدعم الإشعارات");
-    return false;
+    throw new Error("المتصفح ده مش بيدعم الإشعارات");
   }
 
   const permission = await Notification.requestPermission();
@@ -34,9 +33,6 @@ export async function subscribeToPush(userId: string) {
   }
 
   const sub = subscription.toJSON();
-  
-  console.log("DEBUG - userId:", userId);
-  console.log("DEBUG - subscription endpoint:", sub.endpoint);
 
   const { error } = await supabase.from("push_subscriptions").insert({
     user_id: userId,
@@ -44,8 +40,6 @@ export async function subscribeToPush(userId: string) {
     p256dh: sub.keys!.p256dh,
     auth: sub.keys!.auth,
   });
-
-  console.log("INSERT error:", error);
 
   if (error) {
     console.error("Failed to save subscription:", error);

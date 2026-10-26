@@ -2,11 +2,23 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { Technician } from "@/types";
-import { today } from "@/lib/utils";
+import { today, cn } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
-import { Save, RefreshCw, ChevronDown, ChevronUp, Printer, CalendarCheck } from "lucide-react";
+import EmptyState from "@/components/ui/EmptyState";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Page, PageHeader, PageBody, SectionHeader } from "@/components/ui/Page";
+import { StatCard, StatPill } from "@/components/ui/StatCard";
+import { Tabs } from "@/components/ui/Tabs";
+import { FilterChip, ChipRow } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import {
+  Save, RefreshCw, ChevronDown, Printer, CalendarCheck, ClipboardCheck, BarChart3,
+  Users, UserX, CalendarX2, Palmtree, Briefcase,
+} from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
-import { cn } from "@/lib/utils";
 
 const NOT_RECORDED = "—";
 const ATT_OPTS = [NOT_RECORDED, "حاضر", "غياب", "أجازة", "مأمورية"];
@@ -26,15 +38,17 @@ export default function AttendanceClient({
   departments: string[];
   initialYearAttendance: YearAttRow[];
 }) {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [tab, setTab] = useState<Tab>("daily");
   const [date, setDate] = useState(today());
   const [selectedDept, setSelectedDept] = useState<string>(isManager ? "الكل" : (department ?? ""));
   const [rows, setRows] = useState<AttRow[]>([]);
-  const [savedSnapshot, setSavedSnapshot] = useState("");
+  // "[]" مش "" علشان شارة "تغييرات غير محفوظة" ماتظهرش قبل أول تحميل
+  const [savedSnapshot, setSavedSnapshot] = useState("[]");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [yearAttendance, setYearAttendance] = useState<YearAttRow[]>(initialYearAttendance);
   const [statsMonth, setStatsMonth] = useState(today().slice(0, 7));
   const [expandedTech, setExpandedTech] = useState<number | null>(null);
@@ -48,13 +62,6 @@ export default function AttendanceClient({
   const visibleTechIds = useMemo(() => new Set(visibleTechnicians.map(t => t.id)), [visibleTechnicians]);
 
   const dirty = useMemo(() => JSON.stringify(rows) !== savedSnapshot, [rows, savedSnapshot]);
-
-  // رسالة الحالة بتختفي لوحدها
-  useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 3500);
-    return () => clearTimeout(t);
-  }, [notice]);
 
   /* ─────────── تحميل يوم ─────────── */
   const load = async () => {
@@ -86,16 +93,21 @@ export default function AttendanceClient({
   useEffect(() => { load(); }, [date, selectedDept]);
 
   // لو فيه تعديلات مش محفوظة، نسأل قبل ما نغيّر اليوم أو القسم علشان ماتضيعش
-  const confirmDiscard = () =>
-    !dirty || window.confirm("فيه تغييرات مش محفوظة. تتجاهل وتكمل؟");
+  const confirmDiscard = async () =>
+    !dirty || await confirm({
+      title: "فيه تغييرات مش محفوظة",
+      message: "لو كمّلت هتضيع التعديلات اللي ماتحفظتش.",
+      confirmText: "تجاهل التغييرات",
+      tone: "primary",
+    });
 
-  const changeDate = (value: string) => {
-    if (value === date || !confirmDiscard()) return;
+  const changeDate = async (value: string) => {
+    if (value === date || !(await confirmDiscard())) return;
     setDate(value);
   };
 
-  const changeDept = (value: string) => {
-    if (value === selectedDept || !confirmDiscard()) return;
+  const changeDept = async (value: string) => {
+    if (value === selectedDept || !(await confirmDiscard())) return;
     setSelectedDept(value);
   };
 
@@ -104,6 +116,7 @@ export default function AttendanceClient({
 
   /* ─────────── حفظ: بيبعت بس الصفوف اللي اتغيرت، في طلبات مجمعة ─────────── */
   const save = async () => {
+    if (saving) return;
     const saved = new Map<number, AttRow>(
       (JSON.parse(savedSnapshot || "[]") as AttRow[]).map(r => [r.tech_id, r])
     );
@@ -112,7 +125,7 @@ export default function AttendanceClient({
       return !s || s.status !== r.status || s.permission !== r.permission || s.overtime !== r.overtime;
     });
     if (changed.length === 0) {
-      setNotice({ ok: true, text: "مفيش تغييرات تتحفظ" });
+      toast.info("مفيش تغييرات تتحفظ");
       return;
     }
 
@@ -154,7 +167,7 @@ export default function AttendanceClient({
       if (failed?.error) throw new Error(failed.error.message);
     } catch (e) {
       setSaving(false);
-      setNotice({ ok: false, text: (e as Error).message || "حصل خطأ أثناء الحفظ" });
+      toast.error((e as Error).message || "حصل خطأ أثناء الحفظ");
       return;
     }
     setSaving(false);
@@ -184,31 +197,31 @@ export default function AttendanceClient({
       }),
     }).catch(() => {});
 
-    setNotice({ ok: true, text: `تم الحفظ (${changed.length} ${changed.length === 1 ? "فني" : "فنيين"})` });
+    toast.success(`تم الحفظ (${changed.length} ${changed.length === 1 ? "فني" : "فنيين"})`);
   };
 
   /* ─────────── كشف العمل الإضافي ─────────── */
   const printOvertimeForm = async () => {
     const techIds = visibleTechnicians.map(t => t.id);
-    if (techIds.length === 0) return;
+    if (techIds.length === 0 || printing) return;
     setPrinting(true);
     const { data, error } = await supabase.from("overtime")
       .select("tech_id").eq("date", date).eq("has_overtime", true).in("tech_id", techIds);
-    if (error) { setPrinting(false); setNotice({ ok: false, text: error.message }); return; }
+    if (error) { setPrinting(false); toast.error(error.message); return; }
     const otIds = new Set((data ?? []).map(r => r.tech_id));
     const people = visibleTechnicians
       .filter(t => otIds.has(t.id))
       .map(t => ({ name: t.name, route: t.route ?? null, dept: t.department ?? null }));
     if (people.length === 0) {
       setPrinting(false);
-      setNotice({ ok: false, text: "مفيش عمل إضافي محفوظ في التاريخ ده" });
+      toast.warning("مفيش عمل إضافي محفوظ في التاريخ ده");
       return;
     }
     try {
       const blob = await buildOvertimeForm(date, people);
       downloadBlob(blob, `كشف_عمل_إضافي_${date}.docx`);
     } catch (e) {
-      setNotice({ ok: false, text: (e as Error).message });
+      toast.error((e as Error).message);
     }
     setPrinting(false);
   };
@@ -264,259 +277,229 @@ export default function AttendanceClient({
     return new Date(y, m - 1, 1).toLocaleDateString("ar-EG", { month: "long", year: "numeric" });
   }, [statsMonth]);
 
+  // عدد صفوف الهيكل وإحنا بنحمّل اليوم (قريب من عدد الفنيين)
+  const skeletonRows = Math.min(Math.max(visibleTechnicians.length, 3), 8);
+
   /* ═══════════════════════ العرض ═══════════════════════ */
   return (
-    <div className="max-w-6xl mx-auto">
-      {/* شريط علوي ثابت */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <CalendarCheck className="w-5 h-5 text-accent" />
-            <h1 className="text-lg font-bold text-text">الحضور والإذونات</h1>
-            {tab === "daily" && dirty && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-warning/15 text-warning">تغييرات غير محفوظة</span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            {tab === "daily" && (
-              <>
-                <input type="date" value={date} onChange={e => changeDate(e.target.value)}
-                  className="eg-input !py-1.5 !text-xs w-36" />
-                <IconBtn onClick={load} disabled={loading} title="تحديث">
-                  <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-                </IconBtn>
-                <button onClick={printOvertimeForm} disabled={printing}
-                  className="eg-btn-ghost !py-1.5 !text-xs" title="كشف العمل الإضافي للمتسجلين في التاريخ ده">
-                  <Printer className="w-3.5 h-3.5" />{printing ? "..." : "كشف عمل إضافي"}
-                </button>
-                <button onClick={save} disabled={saving || !dirty || rows.length === 0}
-                  className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
-                  <Save className="w-3.5 h-3.5" />{saving ? "جاري الحفظ..." : "حفظ"}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* التبويبات */}
-        <div className="flex gap-1 mt-3">
-          {([["daily", "تسجيل اليوم"], ["stats", "الإحصائيات"]] as const).map(([k, label]) => (
-            <button key={k} onClick={() => setTab(k)}
-              className={cn("px-3 py-1.5 text-xs rounded-md transition-colors",
-                tab === k ? "bg-accent/15 text-accent font-semibold" : "text-subtext hover:text-text")}>
-              {label}
+    <Page width="6xl">
+      <PageHeader
+        title="الحضور والإذونات"
+        icon={CalendarCheck}
+        meta={tab === "daily" && dirty ? <Badge label="تغييرات غير محفوظة" tone="warning" /> : undefined}
+        actions={tab === "daily" ? (
+          <>
+            <input type="date" value={date} onChange={e => changeDate(e.target.value)}
+              aria-label="التاريخ" className="eg-input eg-input-sm w-36" />
+            <Tooltip content="تحديث" side="bottom">
+              <button onClick={load} disabled={loading} aria-label="تحديث" className="eg-btn-ghost eg-btn-sm eg-btn-icon">
+                <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+              </button>
+            </Tooltip>
+            <Tooltip content="كشف العمل الإضافي للمتسجلين في التاريخ ده" side="bottom">
+              <button onClick={printOvertimeForm} disabled={printing} className="eg-btn-ghost eg-btn-sm">
+                {printing ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
+                كشف عمل إضافي
+              </button>
+            </Tooltip>
+            <button onClick={save} disabled={saving || !dirty || rows.length === 0} className="eg-btn-success eg-btn-sm">
+              {saving ? <Spinner className="size-3.5" /> : <Save className="size-3.5" />}
+              {saving ? "جاري الحفظ..." : "حفظ"}
             </button>
-          ))}
-        </div>
-
+          </>
+        ) : undefined}
+        tabs={
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            ariaLabel="أقسام الصفحة"
+            items={[
+              { value: "daily", label: "تسجيل اليوم", icon: <ClipboardCheck className="size-3.5" /> },
+              { value: "stats", label: "الإحصائيات", icon: <BarChart3 className="size-3.5" /> },
+            ]}
+          />
+        }
+      >
         {/* فلتر الأقسام (للمدير بس) */}
         {isManager && (
-          <div className="flex gap-1.5 flex-wrap mt-2">
-            {["الكل", ...departments].map(d => {
-              const active = selectedDept === d;
-              return (
-                <button key={d} onClick={() => changeDept(d)}
-                  className={cn("px-2.5 py-1 text-[11px] rounded-full border transition-colors",
-                    active ? "bg-accent/15 border-accent/60 text-accent font-semibold"
-                           : "bg-card2 border-border text-subtext hover:text-text")}>
-                  {d === "الكل" ? "كل الأقسام" : d}
-                </button>
-              );
-            })}
-          </div>
+          <ChipRow>
+            {["الكل", ...departments].map(d => (
+              <FilterChip key={d} active={selectedDept === d} onClick={() => changeDept(d)}>
+                {d === "الكل" ? "كل الأقسام" : d}
+              </FilterChip>
+            ))}
+          </ChipRow>
         )}
-      </div>
+      </PageHeader>
 
-      <div className="p-4 md:p-6 space-y-4">
-        {notice && (
-          <div className={cn("text-xs px-3 py-2 rounded-lg border",
-            notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
-            {notice.text}
-          </div>
-        )}
-
+      <PageBody>
         {tab === "daily" ? (
           <>
             {/* ملخص اليوم */}
-            <div className="flex items-center gap-2 flex-wrap text-xs">
-              <Stat label="لم يُسجل" value={daySummary.unrecorded} tone="muted" />
-              <Stat label="حاضر" value={daySummary.present} tone="success" />
-              <Stat label="غياب" value={daySummary.absent} tone="danger" />
-              <Stat label="إجازة" value={daySummary.leave} tone="warning" />
-              <Stat label="مأمورية" value={daySummary.mission} tone="accent" />
-              <Stat label="إذن" value={daySummary.permission} tone="muted" />
-              <Stat label="عمل إضافي" value={daySummary.overtime} tone="muted" />
+            <div className="flex flex-wrap items-center gap-2">
+              <StatPill label="لم يُسجل" value={daySummary.unrecorded} tone="muted" />
+              <StatPill label="حاضر" value={daySummary.present} tone="success" />
+              <StatPill label="غياب" value={daySummary.absent} tone="danger" />
+              <StatPill label="إجازة" value={daySummary.leave} tone="warning" />
+              <StatPill label="مأمورية" value={daySummary.mission} tone="accent" />
+              <span aria-hidden className="mx-0.5 hidden h-5 w-px bg-border sm:block" />
+              <StatPill label="إذن" value={daySummary.permission} tone="muted" />
+              <StatPill label="عمل إضافي" value={daySummary.overtime} tone="muted" />
             </div>
 
             {/* جدول اليوم */}
-            <div className="eg-card !p-0 overflow-hidden">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="bg-card2 text-subtext text-xs">
-                    <th className="px-4 py-2 text-right font-semibold">الاسم</th>
-                    <th className="px-3 py-2 text-right font-semibold w-44">الحضور</th>
-                    <th className="px-3 py-2 text-right font-semibold w-56">الإذن</th>
-                    <th className="px-3 py-2 text-center font-semibold w-24">عمل إضافي</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(r => {
-                    const tech = techById.get(r.tech_id);
-                    if (!tech) return null;
-                    const isAbsent = r.status === "غياب";
-                    return (
-                      <tr key={r.tech_id}
-                        className={cn("border-t border-border/40 hover:bg-card2/50", isAbsent && "bg-danger/5")}>
-                        <td className="px-4 py-2">
-                          <div className="font-medium text-text">{tech.name}</div>
-                          {(tech.route || tech.department) && (
-                            <div className="text-[11px] text-subtext">{[tech.department, tech.route].filter(Boolean).join(" · ")}</div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          <select value={r.status} onChange={e => setRow(r.tech_id, { status: e.target.value })}
-                            className={cn("eg-select !py-1 !text-xs w-full",
-                              isAbsent && "!border-danger/50 !text-danger")}>
-                            {ATT_OPTS.map(o => <option key={o} value={o}>{o === NOT_RECORDED ? "لم يُسجل" : o}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2">
-                          <select value={r.permission} onChange={e => setRow(r.tech_id, { permission: e.target.value })}
-                            className="eg-select !py-1 !text-xs w-full">
-                            {PERM_OPTS.map(o => <option key={o}>{o}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <input type="checkbox" checked={r.overtime}
-                            onChange={e => setRow(r.tech_id, { overtime: e.target.checked })}
-                            className="w-4 h-4 accent-emerald-500 cursor-pointer align-middle" />
-                        </td>
+            <div className="eg-card overflow-hidden !p-0">
+              {!loading && rows.length === 0 ? (
+                <EmptyState icon={Users} message="لا يوجد فنيين" description="أضف الفنيين أولاً" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="eg-table min-w-[640px]" aria-busy={loading}>
+                    <thead>
+                      <tr>
+                        <th>الاسم</th>
+                        <th className="w-44">الحضور</th>
+                        <th className="w-56">الإذن</th>
+                        <th className="w-24 text-center">عمل إضافي</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {rows.length === 0 && !loading && (
-                <p className="text-center py-10 text-subtext text-sm">لا يوجد فنيين — أضف الفنيين أولاً</p>
+                    </thead>
+                    <tbody>
+                      {loading ? Array.from({ length: skeletonRows }, (_, i) => (
+                        <tr key={`sk${i}`} aria-hidden>
+                          <td>
+                            <Skeleton className="h-3.5 w-32" />
+                            <Skeleton className="mt-2 h-2.5 w-20" />
+                          </td>
+                          <td><Skeleton className="h-[30px] w-full" /></td>
+                          <td><Skeleton className="h-[30px] w-full" /></td>
+                          <td><Skeleton className="mx-auto size-4 rounded" /></td>
+                        </tr>
+                      )) : rows.map(r => {
+                        const tech = techById.get(r.tech_id);
+                        if (!tech) return null;
+                        const isAbsent = r.status === "غياب";
+                        return (
+                          <tr key={r.tech_id} className={cn(isAbsent && "bg-danger/[0.05]")}>
+                            <td>
+                              <div className="font-medium text-text">{tech.name}</div>
+                              {(tech.route || tech.department) && (
+                                <div className="text-[11px] text-subtext">{[tech.department, tech.route].filter(Boolean).join(" · ")}</div>
+                              )}
+                            </td>
+                            <td>
+                              <select value={r.status} onChange={e => setRow(r.tech_id, { status: e.target.value })}
+                                aria-label={`حضور ${tech.name}`}
+                                className={cn("eg-select eg-input-sm w-full",
+                                  isAbsent && "!border-danger/50 !bg-danger/10 !text-danger")}>
+                                {ATT_OPTS.map(o => <option key={o} value={o}>{o === NOT_RECORDED ? "لم يُسجل" : o}</option>)}
+                              </select>
+                            </td>
+                            <td>
+                              <select value={r.permission} onChange={e => setRow(r.tech_id, { permission: e.target.value })}
+                                aria-label={`إذن ${tech.name}`} className="eg-select eg-input-sm w-full">
+                                {PERM_OPTS.map(o => <option key={o}>{o}</option>)}
+                              </select>
+                            </td>
+                            <td className="text-center">
+                              <input type="checkbox" checked={r.overtime}
+                                onChange={e => setRow(r.tech_id, { overtime: e.target.checked })}
+                                aria-label={`عمل إضافي ${tech.name}`} className="align-middle" />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </>
         ) : (
           <>
             {/* شريط الشهر */}
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <h2 className="text-sm font-bold text-text">إحصائيات {monthLabel}</h2>
-              <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
-                className="eg-input !py-1.5 !text-xs w-40" />
-            </div>
+            <SectionHeader
+              title={`إحصائيات ${monthLabel}`}
+              description="اضغط على أي فني علشان تشوف أيامه في الشهر."
+              actions={
+                <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
+                  aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
+              }
+            />
 
             {/* كروت مختصرة */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <KpiTile label={`غياب ${monthLabel}`} value={monthTotals.absent} tone="danger" />
-              <KpiTile label={`غياب سنة ${yearStr}`} value={yearAbsent} tone="danger" />
-              <KpiTile label={`إجازات ${monthLabel}`} value={monthTotals.leave} tone="warning" />
-              <KpiTile label={`مأموريات ${monthLabel}`} value={monthTotals.mission} tone="accent" />
+            <div className="eg-stagger grid grid-cols-2 gap-3 md:grid-cols-4">
+              <StatCard label={`غياب ${monthLabel}`} value={monthTotals.absent} tone={monthTotals.absent ? "danger" : "muted"} icon={UserX} />
+              <StatCard label={`غياب سنة ${yearStr}`} value={yearAbsent} tone={yearAbsent ? "danger" : "muted"} icon={CalendarX2} />
+              <StatCard label={`إجازات ${monthLabel}`} value={monthTotals.leave} tone={monthTotals.leave ? "warning" : "muted"} icon={Palmtree} />
+              <StatCard label={`مأموريات ${monthLabel}`} value={monthTotals.mission} tone={monthTotals.mission ? "accent" : "muted"} icon={Briefcase} />
             </div>
 
             {/* تفصيل لكل فني */}
-            <div className="eg-card !p-0 overflow-hidden">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="bg-card2 text-subtext text-xs">
-                    <th className="px-4 py-2 text-right font-semibold">الاسم</th>
-                    <th className="px-3 py-2 text-center font-semibold w-20">حاضر</th>
-                    <th className="px-3 py-2 text-center font-semibold w-20">غياب</th>
-                    <th className="px-3 py-2 text-center font-semibold w-20">إجازة</th>
-                    <th className="px-3 py-2 text-center font-semibold w-20">مأمورية</th>
-                    <th className="w-10" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {perTechMonthly.map(({ tech, present, absent, leave, mission, records }) => {
-                    const open = expandedTech === tech.id;
-                    return (
-                      <Fragment key={tech.id}>
-                        <tr onClick={() => setExpandedTech(open ? null : tech.id)}
-                          className="border-t border-border/40 cursor-pointer hover:bg-card2/50">
-                          <td className="px-4 py-2 font-medium text-text">{tech.name}</td>
-                          <td className="px-3 py-2 text-center text-success">{present}</td>
-                          <td className={cn("px-3 py-2 text-center", absent > 0 ? "text-danger font-bold" : "text-subtext")}>{absent}</td>
-                          <td className="px-3 py-2 text-center text-warning">{leave}</td>
-                          <td className="px-3 py-2 text-center text-accent">{mission}</td>
-                          <td className="px-3 py-2 text-subtext">
-                            {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </td>
-                        </tr>
-                        {open && (
-                          <tr className="border-t border-border/40 bg-card2/30">
-                            <td colSpan={6} className="px-4 py-3">
-                              {records.length === 0 ? (
-                                <p className="text-xs text-subtext">لا توجد سجلات هذا الشهر</p>
-                              ) : (
-                                <div className="flex flex-wrap gap-1.5">
-                                  {records.map((r, i) => (
-                                    <span key={i} className="inline-flex items-center gap-1.5 text-[11px] bg-card rounded-md px-2 py-1 border border-border/50">
-                                      <span className="text-subtext tabular-nums">{r.date}</span>
-                                      <Badge label={r.status} />
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {perTechMonthly.length === 0 && (
-                <p className="text-center py-8 text-subtext text-sm">لا يوجد فنيين لعرض إحصائياتهم</p>
+            <div className="eg-card overflow-hidden !p-0">
+              {perTechMonthly.length === 0 ? (
+                <EmptyState icon={Users} message="لا يوجد فنيين لعرض إحصائياتهم" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="eg-table min-w-[520px]">
+                    <thead>
+                      <tr>
+                        <th>الاسم</th>
+                        <th className="w-20 text-center">حاضر</th>
+                        <th className="w-20 text-center">غياب</th>
+                        <th className="w-20 text-center">إجازة</th>
+                        <th className="w-20 text-center">مأمورية</th>
+                        <th className="w-12"><span className="sr-only">السجلات</span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {perTechMonthly.map(({ tech, present, absent, leave, mission, records }) => {
+                        const open = expandedTech === tech.id;
+                        return (
+                          <Fragment key={tech.id}>
+                            <tr onClick={() => setExpandedTech(open ? null : tech.id)}
+                              className={cn("cursor-pointer", open && "bg-accent/[0.06] [&>td]:border-b-0")}>
+                              <td className="font-medium text-text">{tech.name}</td>
+                              <td className={cn("text-center tabular-nums", present ? "text-success" : "text-subtext")}>{present}</td>
+                              <td className={cn("text-center tabular-nums", absent > 0 ? "font-bold text-danger" : "text-subtext")}>{absent}</td>
+                              <td className={cn("text-center tabular-nums", leave ? "text-warning" : "text-subtext")}>{leave}</td>
+                              <td className={cn("text-center tabular-nums", mission ? "text-accent" : "text-subtext")}>{mission}</td>
+                              <td className="text-end">
+                                {/* الضغطة بتوصل للصف نفسه فبيتفتح/يتقفل (والزرار علشان الكيبورد) */}
+                                <button type="button" aria-expanded={open}
+                                  aria-label={`${open ? "إخفاء" : "عرض"} سجلات ${tech.name}`} className="eg-icon-btn">
+                                  <ChevronDown className={cn("size-4 transition-transform duration-200", open && "rotate-180 text-accent")} />
+                                </button>
+                              </td>
+                            </tr>
+                            {open && (
+                              <tr>
+                                <td colSpan={6} className="animate-fade-in bg-accent/[0.03] px-4 pb-3.5 pt-1 hover:bg-accent/[0.03]">
+                                  {records.length === 0 ? (
+                                    <p className="text-xs text-subtext">لا توجد سجلات هذا الشهر</p>
+                                  ) : (
+                                    <ul className="flex flex-wrap gap-1.5">
+                                      {records.map((r, i) => (
+                                        <li key={i}
+                                          className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-card py-1 pe-1 ps-2.5 shadow-card">
+                                          <span className="text-[11px] tabular-nums text-subtext">{r.date}</span>
+                                          <Badge label={r.status} />
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </>
         )}
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
-
-const TONES: Record<string, string> = {
-  success: "text-success",
-  danger: "text-danger",
-  warning: "text-warning",
-  accent: "text-accent",
-  muted: "text-subtext",
-};
-
-function Stat({ label, value, tone }: { label: string; value: number; tone: keyof typeof TONES }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 bg-card2 rounded-md px-2.5 py-1 border border-border/50">
-      <span className="text-subtext">{label}</span>
-      <span className={cn("font-bold tabular-nums", TONES[tone])}>{value}</span>
-    </span>
-  );
-}
-
-function KpiTile({ label, value, tone }: { label: string; value: number; tone: keyof typeof TONES }) {
-  return (
-    <div className="eg-card !p-3">
-      <div className={cn("text-xl font-bold tabular-nums", TONES[tone])}>{value}</div>
-      <div className="text-[11px] text-subtext mt-0.5">{label}</div>
-    </div>
-  );
-}
-
-function IconBtn({ children, onClick, disabled, title }: {
-  children: React.ReactNode; onClick: () => void; disabled?: boolean; title?: string;
-}) {
-  return (
-    <button onClick={onClick} disabled={disabled} title={title}
-      className="p-1.5 rounded-md border border-border bg-card2 text-subtext hover:text-text disabled:opacity-50">
-      {children}
-    </button>
+      </PageBody>
+    </Page>
   );
 }

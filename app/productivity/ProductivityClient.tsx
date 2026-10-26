@@ -3,7 +3,15 @@ import { useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import Modal from "@/components/ui/Modal";
 import EmptyState from "@/components/ui/EmptyState";
-import { Plus, Trash2, Search } from "lucide-react";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { StatCard } from "@/components/ui/StatCard";
+import { SearchInput } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Plus, Trash2, BarChart3, ListChecks, Users, ClipboardCheck, FilterX } from "lucide-react";
 import { today } from "@/lib/utils";
 
 type Record_ = {
@@ -20,9 +28,12 @@ export default function ProductivityClient({
   wos: { id: number; wo_number: string }[];
   role: string;
 }) {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [records, setRecords] = useState<Record_[]>(initialRecords);
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [filterDate, setFilterDate] = useState(today());
   const [filterWO, setFilterWO] = useState("");
@@ -40,9 +51,15 @@ export default function ProductivityClient({
     return matchDate && matchWO && matchSearch;
   }), [records, filterDate, filterWO, search]);
 
-  const addRecord = async () => {
-    if (!form.tech_id || !form.task.trim()) return;
-    setSaving(true);
+  const filtersActive = !!search || !!filterDate || !!filterWO;
+  const clearFilters = () => { setFilterDate(""); setFilterWO(""); setSearch(""); };
+
+  const closeAdd = () => { setAddOpen(false); setError(""); };
+
+  const addRecord = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!form.tech_id || !form.task.trim() || saving) return;
+    setSaving(true); setError("");
     const payload = {
       tech_id: parseInt(form.tech_id),
       wo_id: form.wo_id ? parseInt(form.wo_id) : null,
@@ -55,140 +72,149 @@ export default function ProductivityClient({
       .select("*, technician:technicians(id,name), work_order:work_orders(id,wo_number)")
       .single();
     setSaving(false);
-    if (error) { alert(error.message); return; }
+    if (error) { setError(error.message); return; }
     setRecords(prev => [data, ...prev]);
     setAddOpen(false);
     setForm({ tech_id: "", wo_id: "", work_date: today(), task: "", notes: "" });
+    toast.success("تم تسجيل المهمة");
   };
 
-  const deleteRecord = async (id: number) => {
-    if (!confirm("حذف هذا السجل؟")) return;
-    await supabase.from("daily_productivity").delete().eq("id", id);
-    setRecords(prev => prev.filter(r => r.id !== id));
+  const deleteRecord = async (r: Record_) => {
+    const ok = await confirm({
+      title: "حذف هذا السجل؟",
+      message: <>هيتحذف سجل <span className="font-semibold text-text">{r.technician?.name ?? "الفني"}</span> بتاريخ <span className="tabular-nums">{r.work_date}</span>.</>,
+      confirmText: "حذف السجل",
+      tone: "danger",
+    });
+    if (!ok) return;
+    const { error } = await supabase.from("daily_productivity").delete().eq("id", r.id);
+    if (error) { toast.error(error.message); return; }
+    setRecords(prev => prev.filter(x => x.id !== r.id));
+    toast.success("تم حذف السجل");
   };
+
+  const techCount = new Set(filtered.map(r => r.tech_id)).size;
+  const woCount = new Set(filtered.map(r => r.wo_id).filter(Boolean)).size;
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-xl font-bold text-text">📊 الإنتاجية اليومية</h1>
-        {true && (
-          <button onClick={() => setAddOpen(true)} className="eg-btn-primary">
-            <Plus className="w-4 h-4" />تسجيل مهمة
+    <Page width="5xl">
+      <PageHeader
+        title="الإنتاجية اليومية"
+        icon={BarChart3}
+        actions={
+          <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
+            <Plus className="size-3.5" />تسجيل مهمة
           </button>
-        )}
-      </div>
-
-      {/* Summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <div className="eg-card text-center">
-          <p className="text-2xl font-bold text-accent">{filtered.length}</p>
-          <p className="text-xs text-subtext mt-1">مهام في الفلتر الحالي</p>
+        }
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالفني أو المهمة أو الأمر" className="w-full sm:w-56" />
+          <input type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)}
+            aria-label="التاريخ" className="eg-input eg-input-sm w-40" />
+          <select value={filterWO} onChange={e => setFilterWO(e.target.value)}
+            aria-label="أمر الشغل" className="eg-select eg-input-sm w-44">
+            <option value="">كل أوامر الشغل</option>
+            {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
+          </select>
+          {filtersActive && (
+            <button onClick={clearFilters} className="eg-btn-subtle eg-btn-xs">
+              <FilterX className="size-3" />مسح الفلاتر
+            </button>
+          )}
         </div>
-        <div className="eg-card text-center">
-          <p className="text-2xl font-bold text-accent2">
-            {new Set(filtered.map(r => r.tech_id)).size}
-          </p>
-          <p className="text-xs text-subtext mt-1">فنيين عملوا</p>
-        </div>
-        <div className="eg-card text-center">
-          <p className="text-2xl font-bold text-success">
-            {new Set(filtered.map(r => r.wo_id).filter(Boolean)).size}
-          </p>
-          <p className="text-xs text-subtext mt-1">أوامر شغل مُنجزة</p>
-        </div>
-      </div>
+      </PageHeader>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2">
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-subtext" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            className="eg-input pr-9 w-44" placeholder="بحث..." />
+      <PageBody>
+        <div className="eg-stagger grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <StatCard label="مهام في الفلتر الحالي" value={filtered.length} tone="accent" icon={ListChecks} />
+          <StatCard label="فنيين عملوا" value={techCount} tone="violet" icon={Users} />
+          <StatCard label="أوامر شغل مُنجزة" value={woCount} tone="success" icon={ClipboardCheck} className="col-span-2 sm:col-span-1" />
         </div>
-        <input type="date" value={filterDate}
-          onChange={e => setFilterDate(e.target.value)}
-          className="eg-input w-44" />
-        <select value={filterWO} onChange={e => setFilterWO(e.target.value)} className="eg-select w-44">
-          <option value="">كل أوامر الشغل</option>
-          {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
-        </select>
-        <button onClick={() => { setFilterDate(""); setFilterWO(""); setSearch(""); }}
-          className="eg-btn-ghost text-xs px-3">
-          مسح الفلتر
-        </button>
-      </div>
 
-      {/* Table */}
-      <div className="eg-card overflow-x-auto">
-        <table className="eg-table">
-          <thead>
-            <tr>
-              <th>الفني</th><th>أمر الشغل</th><th>التاريخ</th>
-              <th>المهمة</th><th>ملاحظات</th>
-              {true && <th></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(r => (
-              <tr key={r.id}>
-                <td className="font-medium text-text">{r.technician?.name ?? "—"}</td>
-                <td className="font-mono text-accent text-sm">{r.work_order?.wo_number ?? "—"}</td>
-                <td className="text-subtext">{r.work_date}</td>
-                <td className="text-text">{r.task}</td>
-                <td className="text-subtext">{r.notes ?? "—"}</td>
-                {true && (
-                  <td>
-                    <button onClick={() => deleteRecord(r.id)}
-                      className="text-danger/50 hover:text-danger transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filtered.length === 0 && <EmptyState message="لا توجد سجلات إنتاجية" />}
-      </div>
+        <div className="eg-card overflow-hidden !p-0">
+          {filtered.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="eg-table min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th>الفني</th><th>أمر الشغل</th><th>التاريخ</th>
+                    <th>المهمة</th><th>ملاحظات</th>
+                    <th className="w-12"><span className="sr-only">إجراءات</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(r => (
+                    <tr key={r.id}>
+                      <td className="font-medium text-text">{r.technician?.name ?? "—"}</td>
+                      <td>
+                        {r.work_order?.wo_number
+                          ? <span className="font-mono text-[13px] font-semibold text-accent">{r.work_order.wo_number}</span>
+                          : <span className="text-muted">—</span>}
+                      </td>
+                      <td className="tabular-nums text-subtext">{r.work_date}</td>
+                      <td className="max-w-[300px] text-text">{r.task}</td>
+                      <td className="max-w-[240px] text-subtext">{r.notes ?? "—"}</td>
+                      <td>
+                        <Tooltip content="حذف">
+                          <button onClick={() => deleteRecord(r)} className="eg-icon-btn-danger" aria-label="حذف السجل">
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </Tooltip>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon={BarChart3}
+              message="لا توجد سجلات إنتاجية"
+              description={filtersActive ? "غيّر الفلاتر أو امسحها علشان تشوف باقي السجلات." : undefined}
+              action={filtersActive
+                ? <button onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+                : <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm"><Plus className="size-3.5" />تسجيل مهمة</button>}
+            />
+          )}
+        </div>
+      </PageBody>
 
-      {/* Add Modal */}
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="تسجيل مهمة إنتاجية">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="eg-label">الفني *</label>
-              <select value={form.tech_id} onChange={e => setForm(f => ({ ...f, tech_id: e.target.value }))} className="eg-select">
+      {/* تسجيل مهمة */}
+      <Modal open={addOpen} onClose={closeAdd} title="تسجيل مهمة إنتاجية">
+        <form onSubmit={addRecord} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="الفني" required>
+              <select value={form.tech_id} onChange={e => setForm(f => ({ ...f, tech_id: e.target.value }))}
+                className="eg-select" autoFocus>
                 <option value="">اختر فني...</option>
                 {technicians.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="eg-label">أمر الشغل</label>
+            </Field>
+            <Field label="أمر الشغل">
               <select value={form.wo_id} onChange={e => setForm(f => ({ ...f, wo_id: e.target.value }))} className="eg-select">
                 <option value="">— بدون أمر شغل —</option>
                 {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
               </select>
-            </div>
+            </Field>
+            <Field label="التاريخ">
+              <input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value }))} className="eg-input" />
+            </Field>
           </div>
-          <div>
-            <label className="eg-label">التاريخ</label>
-            <input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value }))} className="eg-input" />
-          </div>
-          <div>
-            <label className="eg-label">المهمة *</label>
+          <Field label="المهمة" required>
             <input value={form.task} onChange={e => setForm(f => ({ ...f, task: e.target.value }))}
               className="eg-input" placeholder="مثال: تجميع لوحة رئيسية WO1978" />
-          </div>
-          <div>
-            <label className="eg-label">ملاحظات</label>
+          </Field>
+          <Field label="ملاحظات">
             <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-              className="eg-input resize-none" rows={2} placeholder="ملاحظات إضافية..." />
-          </div>
-          <button onClick={addRecord} disabled={saving} className="eg-btn-primary w-full justify-center">
-            {saving ? "جاري الحفظ..." : "📊 تسجيل المهمة"}
+              className="eg-input resize-y" rows={2} placeholder="ملاحظات إضافية..." />
+          </Field>
+          <FormError>{error}</FormError>
+          <button type="submit" disabled={saving || !form.tech_id || !form.task.trim()} className="eg-btn-primary w-full">
+            {saving ? <Spinner /> : <ClipboardCheck className="size-4" />}
+            {saving ? "جاري الحفظ..." : "تسجيل المهمة"}
           </button>
-        </div>
+        </form>
       </Modal>
-    </div>
+    </Page>
   );
 }

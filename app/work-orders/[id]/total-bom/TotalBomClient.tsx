@@ -1,15 +1,30 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import Badge from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
-import { ChevronRight, Plus, Save, X, Lock } from "lucide-react";
+import Field from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import Tooltip from "@/components/ui/Tooltip";
+import { Page, PageHeader, PageBody, SectionHeader } from "@/components/ui/Page";
+import { useToast } from "@/components/ui/Toast";
+import { Plus, Save, X, Lock, FileSpreadsheet, ListChecks, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Row = { description: string; qty: string; unit: string; part_no: string; remark: string };
 type SavedRow = { id: number; s_no: number | null; qty: number; unit: string | null; description: string; part_no: string | null; remark: string | null };
 const EMPTY: Row = { description: "", qty: "1", unit: "", part_no: "", remark: "" };
 const COLS = ["description", "qty", "unit", "part_no", "remark"] as const;
+
+// خانات محرر الكتابة بنفس ترتيب COLS (اللصق من Excel بيعتمد على الترتيب ده)
+// span: عرض الخانة من 12 — على الموبايل وعلى الشاشات الكبيرة
+const EDIT_COLS: { key: (typeof COLS)[number]; label: string; span: string; numeric?: boolean }[] = [
+  { key: "description", label: "الوصف", span: "col-span-12 md:col-span-4" },
+  { key: "qty", label: "الكمية", span: "col-span-4 md:col-span-2", numeric: true },
+  { key: "unit", label: "الوحدة", span: "col-span-4 md:col-span-1" },
+  { key: "part_no", label: "رقم الصنف", span: "col-span-4 md:col-span-2" },
+  { key: "remark", label: "ملاحظة", span: "col-span-10 md:col-span-2" },
+];
 
 export default function TotalBomClient({
   wo, initialRows, canWrite,
@@ -18,17 +33,14 @@ export default function TotalBomClient({
   initialRows: SavedRow[];
   canWrite: boolean;
 }) {
-  const router = useRouter();
+  const toast = useToast();
   const [saved, setSaved] = useState<SavedRow[]>(initialRows);
   const [rows, setRows] = useState<Row[]>([{ ...EMPTY }]);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const locked = saved.length > 0;
 
-  const flash = (ok: boolean, text: string) => {
-    setNotice({ ok, text });
-    setTimeout(() => setNotice(null), 3500);
-  };
+  // إشعار سريع (toast) بدل الرسالة اللي كانت بتظهر جوه الصفحة
+  const flash = (ok: boolean, text: string) => toast.show(ok, text);
 
   const update = (i: number, patch: Partial<Row>) =>
     setRows(prev => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -60,6 +72,7 @@ export default function TotalBomClient({
   };
 
   const save = async () => {
+    if (saving) return;
     const payload = rows
       .filter(r => r.description.trim())
       .map((r, idx) => ({
@@ -70,129 +83,152 @@ export default function TotalBomClient({
         part_no: r.part_no.trim() || null,
         remark: r.remark.trim() || null,
       }));
-    if (payload.length === 0) { flash(false, "اكتب سطر واحد على الأقل"); return; }
+    if (payload.length === 0) { toast.warning("اكتب سطر واحد على الأقل"); return; }
 
     setSaving(true);
     const { data, error } = await supabase.rpc("set_total_bom", { p_wo_id: wo.id, p_rows: payload });
-    setSaving(false);
-    if (error) { flash(false, error.message); return; }
+    if (error) { setSaving(false); flash(false, error.message); return; }
 
-    // نجيب الصفوف المحفوظة من الداتابيز
+    // نجيب الصفوف المحفوظة من الداتابيز (الزرار بيفضل مقفول لحد ما نخلص علشان مايتبعتش مرتين)
     const { data: fresh } = await supabase.from("wo_total_bom").select("*").eq("wo_id", wo.id)
       .order("s_no", { ascending: true, nullsFirst: false });
+    setSaving(false);
     setSaved((fresh ?? []) as SavedRow[]);
     setRows([{ ...EMPTY }]);
     flash(true, `تم حفظ Total BOM (${(data as { rows: number }).rows} سطر) — مقفول`);
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* هيدر */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={() => router.push(`/work-orders/${wo.id}`)} className="eg-btn-ghost !py-1.5 !px-2.5 !text-xs">
-            <ChevronRight className="w-3.5 h-3.5" />الأمر
-          </button>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-lg font-bold text-text">Total BOM</h1>
-            <p className="text-xs text-subtext font-mono">{wo.wo_number}
-              {wo.client_name ? ` · ${wo.client_name}` : ""}{wo.project_name ? ` · ${wo.project_name}` : ""}
-            </p>
-          </div>
-          {locked && (
-            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-card2 text-subtext">
-              <Lock className="w-3 h-3" />مقفول
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="p-4 md:p-6 space-y-4">
-        {notice && (
-          <div className={cn("text-xs px-3 py-2 rounded-lg border",
-            notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
-            {notice.text}
-          </div>
+    <Page width="4xl">
+      <PageHeader
+        back={{ href: `/work-orders/${wo.id}`, label: "الأمر" }}
+        icon={FileSpreadsheet}
+        title="Total BOM"
+        meta={locked && (
+          <Badge label="مقفول" tone="neutral" dot={false}>
+            <Lock className="size-3" />مقفول
+          </Badge>
         )}
+        subtitle={<>
+          <span className="font-mono">{wo.wo_number}</span>
+          {wo.client_name ? ` · ${wo.client_name}` : ""}{wo.project_name ? ` · ${wo.project_name}` : ""}
+        </>}
+      />
 
+      <PageBody>
         {/* ── محفوظ ── */}
         {locked ? (
-          <div className="eg-card !p-0 overflow-x-auto">
-            <table className="w-full text-xs border-collapse min-w-[520px]">
-              <thead><tr className="bg-card2 text-subtext">
-                <th className="px-3 py-2 text-center font-semibold w-12">#</th>
-                <th className="px-3 py-2 text-right font-semibold">الوصف</th>
-                <th className="px-3 py-2 text-center font-semibold w-24">الكمية</th>
-                <th className="px-3 py-2 text-center font-semibold w-24">الوحدة</th>
-                <th className="px-3 py-2 text-right font-semibold w-32">رقم الصنف</th>
-                <th className="px-3 py-2 text-right font-semibold">ملاحظة</th>
-              </tr></thead>
-              <tbody>
-                {saved.map((r, i) => (
-                  <tr key={r.id} className="border-t border-border/40">
-                    <td className="px-3 py-1.5 text-center tabular-nums text-subtext">{i + 1}</td>
-                    <td className="px-3 py-1.5 text-text">{r.description}</td>
-                    <td className="px-3 py-1.5 text-center tabular-nums">{r.qty}</td>
-                    <td className="px-3 py-1.5 text-center">{r.unit ?? "—"}</td>
-                    <td className="px-3 py-1.5 font-mono text-subtext">{r.part_no ?? "—"}</td>
-                    <td className="px-3 py-1.5 text-subtext">{r.remark ?? "—"}</td>
+          <section className="eg-card overflow-hidden !p-0">
+            <SectionHeader
+              className="px-4 py-3 sm:px-5"
+              title="البنود"
+              icon={ListChecks}
+              description={<span className="tabular-nums">{saved.length} سطر · مقفول</span>}
+            />
+            <div className="overflow-x-auto border-t border-border/60">
+              <table className="eg-table eg-table-compact min-w-[520px]">
+                <thead>
+                  <tr>
+                    <th className="w-12 text-center">#</th>
+                    <th>الوصف</th>
+                    <th className="w-24 text-center">الكمية</th>
+                    <th className="w-24 text-center">الوحدة</th>
+                    <th className="w-32">رقم الصنف</th>
+                    <th>ملاحظة</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {saved.map((r, i) => (
+                    <tr key={r.id}>
+                      <td className="text-center tabular-nums text-subtext">{i + 1}</td>
+                      <td className="text-text">{r.description}</td>
+                      <td className="text-center tabular-nums">{r.qty}</td>
+                      <td className="text-center text-subtext">{r.unit ?? "—"}</td>
+                      <td className="font-mono text-subtext">{r.part_no ?? "—"}</td>
+                      <td className="text-subtext">{r.remark ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
         ) : (
-          <div className="eg-card"><EmptyState message={canWrite ? "لم يُكتب Total BOM لهذا الأمر بعد" : "لم يُكتب Total BOM لهذا الأمر بعد"} /></div>
+          <div className="eg-card">
+            <EmptyState
+              icon={FileSpreadsheet}
+              compact={canWrite}
+              message="لم يُكتب Total BOM لهذا الأمر بعد"
+              description={canWrite ? "اكتبه من الجدول اللي تحت، أو الصق جدول كامل من Excel." : "بيكتبه مكتب التصميم أو المدير."}
+            />
+          </div>
         )}
 
         {/* ── كتابة (مرة واحدة) ── */}
         {!locked && canWrite && (
-          <div className="eg-card !p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-bold text-text">كتابة Total BOM</h2>
-              <span className="text-[10px] text-warning">بعد الحفظ هيتقفل نهائياً · تقدر تلصق جدول كامل من Excel في أي خانة</span>
-            </div>
-            {rows.map((r, i) => (
-              <div key={i} className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-12 md:col-span-4">
-                  <label className="block text-[11px] text-subtext mb-1">الوصف</label>
-                  <input value={r.description} onChange={e => update(i, { description: e.target.value })} onPaste={e => handlePaste(e, i, 0)} className="eg-input !py-1.5 !text-xs" />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-[11px] text-subtext mb-1">الكمية</label>
-                  <input type="number" min="0.01" step="any" value={r.qty} onChange={e => update(i, { qty: e.target.value })} onPaste={e => handlePaste(e, i, 1)} className="eg-input !py-1.5 !text-xs" />
-                </div>
-                <div className="col-span-4 md:col-span-1">
-                  <label className="block text-[11px] text-subtext mb-1">الوحدة</label>
-                  <input value={r.unit} onChange={e => update(i, { unit: e.target.value })} onPaste={e => handlePaste(e, i, 2)} className="eg-input !py-1.5 !text-xs" />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <label className="block text-[11px] text-subtext mb-1">رقم الصنف</label>
-                  <input value={r.part_no} onChange={e => update(i, { part_no: e.target.value })} onPaste={e => handlePaste(e, i, 3)} className="eg-input !py-1.5 !text-xs" />
-                </div>
-                <div className="col-span-10 md:col-span-2">
-                  <label className="block text-[11px] text-subtext mb-1">ملاحظة</label>
-                  <input value={r.remark} onChange={e => update(i, { remark: e.target.value })} onPaste={e => handlePaste(e, i, 4)} className="eg-input !py-1.5 !text-xs" />
-                </div>
-                <div className="col-span-2 md:col-span-1 flex justify-center">
-                  <button onClick={() => setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)}
-                    className="text-subtext hover:text-danger p-1.5" title="إزالة السطر">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+          <section className="eg-card space-y-4">
+            <SectionHeader
+              title="كتابة Total BOM"
+              icon={PenLine}
+              description="تقدر تلصق جدول كامل من Excel في أي خانة"
+            />
+            <p className="flex items-start gap-2 rounded-lg border border-warning/25 bg-warning/[0.06] px-3 py-2 text-xs leading-5 text-warning">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />
+              بعد الحفظ هيتقفل نهائياً
+            </p>
+
+            <div className="space-y-2">
+              {/* عناوين الأعمدة على الشاشات الكبيرة (على الموبايل كل خانة عليها عنوانها) */}
+              <div aria-hidden className="hidden grid-cols-12 gap-2 md:grid">
+                {EDIT_COLS.map(c => (
+                  <span key={c.key} className={cn("text-xs font-medium text-subtext", c.span)}>{c.label}</span>
+                ))}
               </div>
-            ))}
-            <div className="flex items-center justify-between gap-2">
-              <button onClick={() => setRows(prev => [...prev, { ...EMPTY }])} className="eg-btn-ghost !py-1.5 !text-xs">
-                <Plus className="w-3.5 h-3.5" />سطر
+              {rows.map((r, i) => (
+                <div key={i}
+                  className="grid grid-cols-12 items-end gap-2 rounded-lg border border-border/60 bg-card2/30 p-2.5 md:items-center md:rounded-none md:border-0 md:bg-transparent md:p-0">
+                  {EDIT_COLS.map(c => {
+                    const id = `tbom-${i}-${c.key}`;
+                    return (
+                      <Field key={c.key} label={c.label} htmlFor={id} className={cn(c.span, "md:[&>label]:sr-only")}>
+                        <input
+                          id={id}
+                          type={c.numeric ? "number" : undefined}
+                          min={c.numeric ? "0.01" : undefined}
+                          step={c.numeric ? "any" : undefined}
+                          value={r[c.key]}
+                          onChange={e => update(i, { [c.key]: e.target.value } as Partial<Row>)}
+                          onPaste={e => handlePaste(e, i, COLS.indexOf(c.key))}
+                          className="eg-input eg-input-sm"
+                        />
+                      </Field>
+                    );
+                  })}
+                  <div className="col-span-2 flex justify-center md:col-span-1">
+                    <Tooltip content="إزالة السطر">
+                      <button type="button"
+                        onClick={() => setRows(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)}
+                        disabled={rows.length === 1}
+                        className="eg-icon-btn-danger" aria-label={`إزالة السطر ${i + 1}`}>
+                        <X className="size-3.5" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-4">
+              <button type="button" onClick={() => setRows(prev => [...prev, { ...EMPTY }])} className="eg-btn-ghost eg-btn-sm">
+                <Plus className="size-3.5" />سطر
               </button>
-              <button onClick={save} disabled={saving || !rows.some(r => r.description.trim())} className="eg-btn-success !py-1.5 !text-xs disabled:opacity-40">
-                <Save className="w-3.5 h-3.5" />{saving ? "جاري الحفظ..." : "حفظ Total BOM"}
+              <button type="button" onClick={save} disabled={saving || !rows.some(r => r.description.trim())} className="eg-btn-success eg-btn-sm">
+                {saving ? <Spinner className="size-3.5" /> : <Save className="size-3.5" />}
+                {saving ? "جاري الحفظ..." : "حفظ Total BOM"}
               </button>
             </div>
-          </div>
+          </section>
         )}
-      </div>
-    </div>
+      </PageBody>
+    </Page>
   );
 }

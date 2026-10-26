@@ -1,13 +1,20 @@
 "use client";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { deptLabel } from "@/lib/roles";
+import { deptLabel, initials } from "@/lib/roles";
+import { cn } from "@/lib/utils";
 import { Technician } from "@/types";
 import Modal from "@/components/ui/Modal";
 import Badge from "@/components/ui/Badge";
 import EmptyState from "@/components/ui/EmptyState";
-import { Plus, Search, ChevronLeft } from "lucide-react";
+import Field, { FormError } from "@/components/ui/Field";
+import Spinner from "@/components/ui/Spinner";
+import { Page, PageHeader, PageBody } from "@/components/ui/Page";
+import { SearchInput } from "@/components/ui/Filters";
+import { useToast } from "@/components/ui/Toast";
+import { Plus, ChevronLeft, Users, UserPlus } from "lucide-react";
 
 type TechRow = Technician & {
   tech_skills?: { skill_id: number; skills: { skill_name: string } | null }[];
@@ -25,6 +32,7 @@ export default function TechniciansClient({
   department: string | null;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [techs, setTechs] = useState<TechRow[]>(initialTechnicians);
   const [search, setSearch] = useState("");
   const [filterGrade, setFilterGrade] = useState("الكل");
@@ -43,6 +51,9 @@ export default function TechniciansClient({
     (filterGrade === "الكل" || t.grade === filterGrade)
   ), [techs, search, filterGrade]);
 
+  const filtersActive = !!search || filterGrade !== "الكل";
+  const clearFilters = () => { setSearch(""); setFilterGrade("الكل"); };
+
   const skillNames = (t: TechRow) =>
     (t.tech_skills ?? []).map(ts => ts.skills?.skill_name).filter(Boolean) as string[];
 
@@ -53,9 +64,11 @@ export default function TechniciansClient({
     }));
 
   const resetForm = () => setForm({ name: "", grade: "فني", route: "", skill_ids: [] });
+  const closeAdd = () => { setAddOpen(false); resetForm(); setError(""); };
 
-  const addTech = async () => {
-    if (!form.name.trim()) return;
+  const addTech = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!form.name.trim() || !deptEffective || saving) return;
     setSaving(true); setError("");
     const { data, error: e1 } = await supabase
       .from("technicians")
@@ -76,125 +89,172 @@ export default function TechniciansClient({
       tech_skills: skills.map(s => ({ skill_id: s.id, skills: { skill_name: s.skill_name } })),
     }, ...prev]);
     setAddOpen(false); resetForm(); setSaving(false);
+    toast.success(`تمت إضافة ${data.name ?? "الفني"}`);
   };
 
   return (
-    <div className="max-w-5xl mx-auto">
-      {/* شريط علوي ثابت */}
-      <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border/60 px-4 md:px-6 py-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold text-text">الفنيين</h1>
-            <span className="text-xs text-subtext tabular-nums">{filtered.length} / {techs.length}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-subtext" />
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                className="eg-input !py-1.5 !text-xs pr-8 w-44" placeholder="بحث بالاسم أو خط السير" />
-            </div>
-            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
-              className="eg-select !py-1.5 !text-xs w-28">
-              <option>الكل</option>
-              {GRADES.map(g => <option key={g}>{g}</option>)}
-            </select>
-            <button onClick={() => setAddOpen(true)} className="eg-btn-primary !py-1.5 !text-xs">
-              <Plus className="w-3.5 h-3.5" />إضافة فني
-            </button>
-          </div>
-        </div>
-      </div>
+    <Page width="5xl">
+      <PageHeader
+        title="الفنيين"
+        icon={Users}
+        subtitle={<span className="tabular-nums">{filtersActive ? `${filtered.length} من ${techs.length} فني` : `${techs.length} فني`}</span>}
+        actions={<>
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو خط السير" className="w-full sm:w-56" />
+          <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
+            aria-label="الدرجة" className="eg-select eg-input-sm w-28">
+            <option value="الكل">كل الدرجات</option>
+            {GRADES.map(g => <option key={g}>{g}</option>)}
+          </select>
+          <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
+            <Plus className="size-3.5" />إضافة فني
+          </button>
+        </>}
+      />
 
-      <div className="p-4 md:p-6">
-        <div className="eg-card !p-0 overflow-hidden">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-card2 text-subtext text-xs">
-                <th className="px-4 py-2 text-right font-semibold">الاسم</th>
-                <th className="px-3 py-2 text-right font-semibold w-40">خط السير</th>
-                <th className="px-3 py-2 text-right font-semibold w-24">الدرجة</th>
-                <th className="px-3 py-2 text-right font-semibold hidden md:table-cell">المهارات</th>
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(t => {
-                const skills = skillNames(t);
-                return (
-                  <tr key={t.id} onClick={() => router.push(`/technicians/${t.id}`)}
-                    className="border-t border-border/40 cursor-pointer hover:bg-card2/50 group">
-                    <td className="px-4 py-2 font-medium text-text">{t.name}</td>
-                    <td className="px-3 py-2 text-xs text-subtext">{t.route ?? "—"}</td>
-                    <td className="px-3 py-2"><Badge label={t.grade ?? "فني"} /></td>
-                    <td className="px-3 py-2 text-xs text-subtext hidden md:table-cell">
-                      <span className="line-clamp-1">{skills.length ? skills.join("، ") : "—"}</span>
-                    </td>
-                    <td className="px-3 py-2 text-subtext group-hover:text-accent">
-                      <ChevronLeft className="w-4 h-4" />
-                    </td>
+      <PageBody>
+        <div className="eg-card overflow-hidden !p-0">
+          {filtered.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="eg-table min-w-[480px]">
+                <thead>
+                  <tr>
+                    <th>الاسم</th>
+                    <th className="w-40">خط السير</th>
+                    <th className="w-24">الدرجة</th>
+                    <th className="hidden md:table-cell">المهارات</th>
+                    <th className="w-10"><span className="sr-only">فتح</span></th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length === 0 && <EmptyState message="لا يوجد فنيين" />}
+                </thead>
+                <tbody>
+                  {filtered.map(t => {
+                    const skills = skillNames(t);
+                    const href = `/technicians/${t.id}`;
+                    return (
+                      <tr key={t.id} onClick={() => router.push(href)} className="group cursor-pointer">
+                        <td>
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <span aria-hidden
+                              className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 text-[11px] font-bold text-accent ring-1 ring-inset ring-accent/25">
+                              {initials(t.name)}
+                            </span>
+                            <Link href={href} onClick={e => e.stopPropagation()}
+                              className="min-w-0 max-w-[240px] truncate font-medium text-text underline-offset-4 transition-colors hover:text-accent hover:underline">
+                              {t.name}
+                            </Link>
+                          </div>
+                        </td>
+                        <td className="text-xs text-subtext">{t.route || "—"}</td>
+                        <td><Badge label={t.grade ?? "فني"} /></td>
+                        <td className="hidden md:table-cell">
+                          <span className="block max-w-[320px] truncate text-xs text-subtext" title={skills.length ? skills.join("، ") : undefined}>
+                            {skills.length ? skills.join("، ") : "—"}
+                          </span>
+                        </td>
+                        <td className="text-muted transition-colors group-hover:text-accent">
+                          <ChevronLeft className="size-4 transition-transform duration-150 group-hover:-translate-x-0.5" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon={Users}
+              message={techs.length ? "مفيش فنيين مطابقين للبحث" : "لا يوجد فنيين"}
+              description={techs.length ? "غيّر الدرجة أو امسح البحث علشان تشوف باقي الفنيين." : "ابدأ بإضافة أول فني."}
+              action={techs.length > 0 && filtersActive
+                ? <button onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+                : techs.length === 0
+                  ? <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm"><Plus className="size-3.5" />إضافة فني</button>
+                  : undefined}
+            />
+          )}
         </div>
-      </div>
+      </PageBody>
 
       {/* مودال الإضافة */}
-      <Modal open={addOpen} onClose={() => { setAddOpen(false); resetForm(); setError(""); }}
-        title="إضافة فني جديد" size="md">
-        <div className="space-y-4">
-          <div>
-            <label className="eg-label">الاسم *</label>
+      <Modal open={addOpen} onClose={closeAdd} title="إضافة فني جديد" size="md">
+        <form onSubmit={addTech} className="space-y-4">
+          <Field label="الاسم" required>
             <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="eg-input" placeholder="اسم الفني" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="eg-label">الدرجة الوظيفية</label>
+              className="eg-input" placeholder="اسم الفني" autoFocus />
+          </Field>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="الدرجة الوظيفية">
               <select value={form.grade}
                 onChange={e => setForm(f => ({ ...f, grade: e.target.value as typeof GRADES[number] }))}
                 className="eg-select">
                 {GRADES.map(g => <option key={g}>{g}</option>)}
               </select>
-            </div>
-            <div>
-              <label className="eg-label">خط السير</label>
+            </Field>
+            <Field label="خط السير">
               <input value={form.route} onChange={e => setForm(f => ({ ...f, route: e.target.value }))}
                 className="eg-input" placeholder="مثال: كرداسة" />
-            </div>
+            </Field>
           </div>
           {role === "manager" && (
-            <div>
-              <label className="eg-label">القسم *</label>
+            <Field label="القسم" required>
               <select value={formDept} onChange={e => setFormDept(e.target.value)} className="eg-select">
                 <option value="">— اختار القسم —</option>
                 {["SHEET", "PAINT", "ASSEMBLY"].map(d => <option key={d} value={d}>{deptLabel(d)}</option>)}
               </select>
-            </div>
+            </Field>
           )}
-          <div>
-            <label className="eg-label">المهارات</label>
-            <div className="bg-card2 rounded-lg p-3 max-h-40 overflow-y-auto grid grid-cols-2 gap-2">
-              {allSkills.map(s => (
-                <label key={s.id} className="flex items-center gap-2 cursor-pointer text-sm text-text">
-                  <input type="checkbox" checked={form.skill_ids.includes(s.id)}
-                    onChange={() => toggleSkill(s.id)} className="accent-emerald-500 w-4 h-4" />
-                  {s.skill_name}
-                </label>
-              ))}
-              {allSkills.length === 0 && (
-                <p className="text-xs text-subtext col-span-2">لا توجد مهارات — أضفها أولاً من تبويب المهارات</p>
-              )}
-            </div>
-          </div>
-          {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={addTech} disabled={saving || !form.name.trim() || !deptEffective} className="eg-btn-primary w-full justify-center">
+          <Field label={<SkillsLabel count={form.skill_ids.length} />}>
+            <SkillChecklist skills={allSkills} selected={form.skill_ids} onToggle={toggleSkill} />
+          </Field>
+          <FormError>{error}</FormError>
+          <button type="submit" disabled={saving || !form.name.trim() || !deptEffective} className="eg-btn-primary w-full">
+            {saving ? <Spinner /> : <UserPlus className="size-4" />}
             {saving ? "جاري الحفظ..." : "حفظ"}
           </button>
-        </div>
+        </form>
       </Modal>
+    </Page>
+  );
+}
+
+/* ═══════════════════════ مكونات صغيرة ═══════════════════════ */
+
+// عنوان المهارات مع عدد المختار
+function SkillsLabel({ count }: { count: number }) {
+  return (
+    <>
+      المهارات
+      {count > 0 && (
+        <span className="mr-1.5 rounded-full bg-accent/15 px-1.5 text-[11px] font-semibold tabular-nums text-accent">{count}</span>
+      )}
+    </>
+  );
+}
+
+// اختيار المهارات ككروت checkbox
+function SkillChecklist({ skills, selected, onToggle }: {
+  skills: Skill[]; selected: number[]; onToggle: (id: number) => void;
+}) {
+  if (skills.length === 0) {
+    return (
+      <p className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-center text-xs text-subtext">
+        لا توجد مهارات — أضفها أولاً من تبويب المهارات
+      </p>
+    );
+  }
+  return (
+    <div className="grid max-h-52 grid-cols-1 gap-2 overflow-y-auto overscroll-contain sm:grid-cols-2">
+      {skills.map(s => {
+        const on = selected.includes(s.id);
+        return (
+          <label key={s.id} className={cn(
+            "flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm text-text transition-colors duration-150",
+            on ? "border-accent/50 bg-accent/10" : "border-border/60 bg-card2/50 hover:border-border-strong",
+          )}>
+            <input type="checkbox" checked={on} onChange={() => onToggle(s.id)} className="shrink-0" />
+            <span className="min-w-0 truncate">{s.skill_name}</span>
+          </label>
+        );
+      })}
     </div>
   );
 }
