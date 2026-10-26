@@ -16,11 +16,11 @@ export default async function FilesPage() {
     supabase.from("files").select(`
       *,
       work_order:work_orders(wo_number),
-      item:work_order_items(item_no, description),
+      file_items(item:work_order_items(item_no, description)),
       supervisor:technicians(name)
     `).order("id", { ascending: false }),
     supabase.from("work_orders").select("id, wo_number").order("id", { ascending: false }),
-    // الملف بيتسجل على بند من بنود الأمر (migration 025)
+    // الملف بيتسجل على بند أو أكتر من بنود الأمر (migrations 025 و 026)
     supabase.from("work_order_items").select("id, wo_id, item_no, description").order("item_no"),
     supabase.from("technicians").select("id, name").eq("grade", "مشرف").order("name"),
   ]);

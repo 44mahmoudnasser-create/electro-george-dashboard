@@ -15,13 +15,19 @@ import { today } from "@/lib/utils";
 type FileRow = {
   id: number; wo_id?: number; work_order_item_id?: number | null; file_name: string; file_type?: string;
   receive_date?: string; delivered_to?: number; delivery_date?: string;
-  work_order?: { wo_number: string }; item?: { item_no: number; description: string } | null;
+  work_order?: { wo_number: string };
+  file_items?: { item: { item_no: number; description: string } | null }[];
   supervisor?: { name: string };
 };
 type ItemLite = { id: number; wo_id: number; item_no: number; description: string };
 
 const itemLabel = (it?: { item_no: number; description: string } | null) =>
   it ? `#${it.item_no} ${it.description}` : "";
+// كل البنود اللي الملف يخصها، مترتبة برقم البند
+const fileItems = (f: FileRow) =>
+  (f.file_items ?? []).map(x => x.item).filter(Boolean)
+    .sort((a, b) => a!.item_no - b!.item_no) as { item_no: number; description: string }[];
+const fileItemsLabel = (f: FileRow) => fileItems(f).map(itemLabel).join("، ");
 
 const FILE_TYPES = ["إضافة","تعديل","أمر الشغل نفسه"];
 
@@ -40,7 +46,7 @@ export default function FilesClient({
   const [recvOpen, setRecvOpen] = useState(false);
   const [deliverOpen, setDeliverOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const emptyRecv = () => ({ wo_id: "", item_id: "", file_name: "", file_type: FILE_TYPES[0], receive_date: today() });
+  const emptyRecv = () => ({ wo_id: "", item_ids: [] as string[], file_name: "", file_type: FILE_TYPES[0], receive_date: today() });
   const [recvForm, setRecvForm] = useState(emptyRecv);
   const [deliverForm, setDeliverForm] = useState({ file_id: "", supervisor_id: "", delivery_date: today() });
 
@@ -48,13 +54,17 @@ export default function FilesClient({
   const filtered = files.filter(f =>
     !search || f.file_name.toLowerCase().includes(search.toLowerCase()) ||
     (f.work_order?.wo_number ?? "").includes(search) ||
-    (f.item?.description ?? "").includes(search)
+    fileItemsLabel(f).includes(search)
   );
 
   // بنود الأمر المختار في فورم الاستلام — الملف بيتسجل على بند
   const recvItems = items.filter(it => String(it.wo_id) === recvForm.wo_id);
   const recvNeedsItem = recvForm.wo_id !== "";
-  const recvValid = !!recvForm.file_name.trim() && (!recvNeedsItem || !!recvForm.item_id);
+  const recvValid = !!recvForm.file_name.trim() && (!recvNeedsItem || recvForm.item_ids.length > 0);
+  const toggleRecvItem = (id: string) => setRecvForm(f => ({
+    ...f, item_ids: f.item_ids.includes(id) ? f.item_ids.filter(x => x !== id) : [...f.item_ids, id],
+  }));
+  const allRecvItems = recvItems.length > 0 && recvItems.every(it => recvForm.item_ids.includes(String(it.id)));
 
   const openDeliver = (fileId?: number) => {
     setDeliverForm({ file_id: fileId ? String(fileId) : "", supervisor_id: "", delivery_date: today() });
@@ -76,15 +86,27 @@ export default function FilesClient({
     setSaving(true);
     const { data, error } = await supabase.from("files").insert({
       wo_id: recvForm.wo_id ? parseInt(recvForm.wo_id) : null,
-      work_order_item_id: recvForm.item_id ? parseInt(recvForm.item_id) : null,
       file_name: recvForm.file_name,
       file_type: recvForm.file_type,
       receive_date: recvForm.receive_date || today(),
-    }).select(`*, work_order:work_orders(wo_number), item:work_order_items(item_no, description), supervisor:technicians(name)`).single();
+    }).select("id").single();
+    if (error) { setSaving(false); toast.error(error.message); return; }
+
+    // ربط الملف بالبنود المختارة؛ لو فشل بنمسح الملف علشان مايفضلش متسجل من غير بنوده
+    if (recvForm.item_ids.length) {
+      const { error: linkErr } = await supabase.from("file_items")
+        .insert(recvForm.item_ids.map(id => ({ file_id: data.id, item_id: parseInt(id) })));
+      if (linkErr) {
+        await supabase.from("files").delete().eq("id", data.id);
+        setSaving(false); toast.error(linkErr.message); return;
+      }
+    }
+    const { data: fresh } = await supabase.from("files")
+      .select(`*, work_order:work_orders(wo_number), file_items(item:work_order_items(item_no, description)), supervisor:technicians(name)`)
+      .eq("id", data.id).single();
     setSaving(false);
-    if (error) { toast.error(error.message); return; }
     notify(data.id, "received");
-    setFiles(prev => [data, ...prev]);
+    if (fresh) setFiles(prev => [fresh, ...prev]);
     setRecvOpen(false);
     setRecvForm(emptyRecv());
     toast.success("تم تسجيل استلام الملف");
@@ -174,7 +196,12 @@ export default function FilesClient({
                         {f.work_order?.wo_number
                           ? <span className="font-mono text-[13px] font-semibold text-accent">{f.work_order.wo_number}</span>
                           : <span className="text-muted">—</span>}
-                        {f.item && <div className="truncate text-[11px] text-subtext">{itemLabel(f.item)}</div>}
+                        {fileItems(f).length > 0 && (
+                          <div className="truncate text-[11px] text-subtext" title={fileItemsLabel(f)}>
+                            {fileItems(f).length > 1 && <span className="ml-1 font-semibold text-accent">{fileItems(f).length} بنود:</span>}
+                            {fileItemsLabel(f)}
+                          </div>
+                        )}
                       </td>
                       <td className="tabular-nums text-subtext">{f.receive_date ?? "—"}</td>
                       <td className="text-text">{f.supervisor?.name ?? <Badge label="لم يُسلَّم" tone="warning" />}</td>
@@ -211,23 +238,43 @@ export default function FilesClient({
         <form onSubmit={recvFile} className="space-y-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="أمر الشغل">
-              <select value={recvForm.wo_id} onChange={e => setRecvForm(f => ({ ...f, wo_id: e.target.value, item_id: "" }))}
+              <select value={recvForm.wo_id} onChange={e => setRecvForm(f => ({ ...f, wo_id: e.target.value, item_ids: [] }))}
                 className="eg-select" autoFocus>
                 <option value="">— بدون أمر شغل —</option>
                 {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
               </select>
             </Field>
-            <Field label="البند" required={recvNeedsItem}
-              hint={recvNeedsItem && recvItems.length === 0
-                ? <span className="text-warning">الأمر ده لسه مالوش بنود — ضيف البنود من صفحة الأمر الأول</span>
-                : !recvNeedsItem ? "اختار أمر الشغل الأول" : undefined}>
-              <select value={recvForm.item_id} onChange={e => setRecvForm(f => ({ ...f, item_id: e.target.value }))}
-                disabled={!recvNeedsItem || recvItems.length === 0} className="eg-select">
-                <option value="">{recvNeedsItem ? "اختار البند..." : "—"}</option>
-                {recvItems.map(it => <option key={it.id} value={it.id}>{itemLabel(it)}</option>)}
-              </select>
-            </Field>
           </div>
+          {recvNeedsItem && (
+            <Field label={<span className="flex items-center justify-between gap-2">
+                <span>البنود اللي الملف يخصها <span className="text-danger">*</span></span>
+                {recvItems.length > 1 && (
+                  <button type="button" className="eg-link text-[11px]"
+                    onClick={() => setRecvForm(f => ({ ...f, item_ids: allRecvItems ? [] : recvItems.map(it => String(it.id)) }))}>
+                    {allRecvItems ? "إلغاء الكل" : "اختيار الكل"}
+                  </button>
+                )}
+              </span>}
+              hint={recvItems.length === 0
+                ? <span className="text-warning">الأمر ده لسه مالوش بنود — ضيف البنود من صفحة الأمر الأول</span>
+                : `متحدد ${recvForm.item_ids.length} من ${recvItems.length}`}>
+              {recvItems.length > 0 && (
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border/70 bg-card2/40 p-1.5">
+                  {recvItems.map(it => {
+                    const id = String(it.id);
+                    const on = recvForm.item_ids.includes(id);
+                    return (
+                      <label key={it.id} className={`flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${on ? "bg-accent/10 text-text" : "text-subtext hover:bg-card3/60 hover:text-text"}`}>
+                        <input type="checkbox" checked={on} onChange={() => toggleRecvItem(id)} />
+                        <span className="font-mono text-[12px] text-accent">#{it.item_no}</span>
+                        <span className="truncate">{it.description}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </Field>
+          )}
           <Field label="اسم الملف" required>
             <input value={recvForm.file_name} onChange={e => setRecvForm(f => ({ ...f, file_name: e.target.value }))}
               className="eg-input" placeholder="مثال: مخطط كهربي - WO2026" />
@@ -258,7 +305,7 @@ export default function FilesClient({
               <option value="">اختر ملف...</option>
               {pending.map(f => (
                 <option key={f.id} value={f.id}>
-                  {[f.file_name, f.work_order?.wo_number, itemLabel(f.item)].filter(Boolean).join(" · ")}
+                  {[f.file_name, f.work_order?.wo_number, fileItemsLabel(f)].filter(Boolean).join(" · ")}
                 </option>
               ))}
             </select>

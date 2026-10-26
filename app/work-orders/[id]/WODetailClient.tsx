@@ -935,7 +935,9 @@ export default function WODetailClient({
               numeric={[3, 5]}
               rows={files.map(f => [
                 f.file_name,
-                f.item ? `#${f.item.item_no} ${f.item.description}` : "—",
+                (f.file_items ?? []).map((x: any) => x.item).filter(Boolean)
+                  .sort((a: any, b: any) => a.item_no - b.item_no)
+                  .map((it: any) => `#${it.item_no} ${it.description}`).join("، ") || "—",
                 f.file_type ? <Badge label={f.file_type} dot={false} /> : "—",
                 f.receive_date ?? "—",
                 f.supervisor_name ?? "—",
