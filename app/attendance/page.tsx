@@ -27,13 +27,23 @@ export default async function AttendancePage() {
     departments = Array.from(new Set((deptRows ?? []).map(d => d.department))).sort();
   }
 
-  // سنة كاملة من بيانات الحضور (أساس حساب إحصائيات الشهر والسنة)
+  // بيانات الحضور للسنة الحالية والسنة اللي قبلها (أساس الإحصائيات)
+  // Supabase بيرجع 1000 صف كحد أقصى للطلب، فبنقرا على دفعات لحد ما نخلص (علشان الأرقام تبقى صح)
   const yearStr = new Date().getFullYear().toString();
-  const { data: yearAttendance } = await supabase
-    .from("attendance")
-    .select("tech_id, date, status")
-    .gte("date", `${yearStr}-01-01`)
-    .lte("date", `${yearStr}-12-31`);
+  const PAGE = 1000;
+  const yearAttendance: { id: number; tech_id: number; date: string; status: string }[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("attendance")
+      .select("id, tech_id, date, status")
+      .gte("date", `${Number(yearStr) - 1}-01-01`)
+      .lte("date", `${yearStr}-12-31`)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(error.message);
+    yearAttendance.push(...(data ?? []));
+    if (!data || data.length < PAGE) break;
+  }
 
   return (
     <AppShell role={role}>
@@ -43,7 +53,7 @@ export default async function AttendancePage() {
         department={department}
         isManager={isManager}
         departments={departments}
-        initialYearAttendance={yearAttendance ?? []}
+        initialYearAttendance={yearAttendance}
       />
     </AppShell>
   );
