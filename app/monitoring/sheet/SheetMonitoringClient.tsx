@@ -14,7 +14,7 @@ import { FilterChip, SearchInput } from "@/components/ui/Filters";
 import { useToast } from "@/components/ui/Toast";
 import {
   Scissors, Settings, Plus, Route, Layers, AlertTriangle, RefreshCw, Info, Check,
-  CheckCircle2, Circle, ChevronLeft, Hourglass, Lock,
+  CheckCircle2, Circle, ChevronLeft, Hourglass, Lock, PackageCheck,
 } from "lucide-react";
 
 /* ═══════════════════════ أنواع وثوابت ═══════════════════════ */
@@ -283,6 +283,67 @@ export default function SheetMonitoringClient({
       }
       return [...prev, { production_item_id: itemId, stage, qty_done: qtyDone }];
     });
+
+  /* ─────────── تسجيل الكل (جماعي) ─────────── */
+
+  // كل بند متحدد وليه كمية متاحة للتسجيل في المرحلة الحالية (أو الإجمالي)
+  // البنود اللي ليها مسار مايتسجلوش من الإجمالي — بيتسجلوا بالمرحلة
+  const bulkPlan = useMemo(() => items
+    .filter(it => selected.has(it.id))
+    .map(it => {
+      if (view === "total") {
+        if (routeOf(it).length > 0) return null;
+        const q = remainingTotal(it);
+        return q > 0 ? { item: it, stage: null as Stage | null, qty: q } : null;
+      }
+      const info = stageInfo(it, view);
+      if (!info || info.available <= 0) return null;
+      return { item: it, stage: view as Stage, qty: info.available };
+    })
+    .filter((p): p is { item: QueueItem; stage: Stage | null; qty: number } => p !== null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, selected, view, doneMap]);
+
+  const skippedBulk = selected.size - bulkPlan.length;
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkMachine, setBulkMachine] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkMachines = machines.filter(m =>
+    m.active && (view === "total" || !m.stage || m.stage === view));
+
+  const runBulk = async () => {
+    if (bulkPlan.length === 0 || bulkBusy) return;
+    if (machineRequired && !bulkMachine) { toast.error("اختيار المكنة إجباري"); return; }
+    setBulkBusy(true);
+    const machineId = bulkMachine ? Number(bulkMachine) : null;
+    let done = 0;
+    for (const p of bulkPlan) {
+      if (p.stage) {
+        const { data, error } = await supabase.rpc("log_sheet_substage", {
+          p_item_id: p.item.id, p_stage: p.stage, p_qty: p.qty, p_machine_id: machineId, p_note: null,
+        });
+        if (error) { toast.error(`${p.item.description}: ${error.message}`); break; }
+        const res = data as { qty_done: number; qty_sheet: number };
+        applySubstage(p.item.id, p.stage, Number(res.qty_done));
+        setItems(prev => prev.map(it => it.id === p.item.id ? { ...it, qty_sheet: Number(res.qty_sheet) } : it));
+        setLockedIds(prev => new Set(prev).add(p.item.id));
+      } else {
+        const { error } = await supabase.rpc("log_production", {
+          p_item_id: p.item.id, p_stage: "sheet", p_qty: p.qty, p_machine_id: machineId, p_note: null,
+        });
+        if (error) { toast.error(`${p.item.description}: ${error.message}`); break; }
+        setItems(prev => prev.map(it => it.id === p.item.id ? { ...it, qty_sheet: (it.qty_sheet ?? 0) + p.qty } : it));
+      }
+      done++;
+    }
+    setBulkBusy(false);
+    if (done > 0) {
+      toast.success(`تم تسجيل ${done} بند`);
+      setBulkOpen(false);
+      setBulkMachine("");
+      setSelected(new Set());
+    }
+  };
 
   /* ─────────── تحديد المسار ─────────── */
 
@@ -608,6 +669,9 @@ export default function SheetMonitoringClient({
               تم تحديد <span className="font-bold tabular-nums">{selected.size}</span> بند
             </span>
             <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setBulkOpen(true)} disabled={bulkPlan.length === 0} className="eg-btn-success eg-btn-sm disabled:opacity-40">
+                <PackageCheck className="size-3.5" />تسجيل الكل
+              </button>
               <button type="button" onClick={() => openRoute(Array.from(selected))} className="eg-btn-primary eg-btn-sm">
                 <Route className="size-3.5" />تحديد المسار
               </button>
@@ -616,6 +680,40 @@ export default function SheetMonitoringClient({
           </div>
         )}
       </PageBody>
+
+      {/* ── مودال تسجيل الكل ── */}
+      <Modal open={bulkOpen} onClose={() => setBulkOpen(false)} title={view === "total" ? "تسجيل الكل — صاج" : `تسجيل الكل — ${STAGE_LABEL[view as Stage]}`}>
+        <div className="space-y-4">
+          <div className="space-y-2 rounded-lg border border-border/70 bg-card2/60 p-3 text-xs">
+            <p className="text-text">هيتسجلوا كامل المتاح لكل بند متحدد:</p>
+            <ul className="max-h-48 space-y-1 overflow-y-auto">
+              {bulkPlan.map(p => (
+                <li key={p.item.id} className="flex items-center justify-between gap-2">
+                  <span className="truncate text-text">{p.item.description}</span>
+                  <span className="shrink-0 tabular-nums font-semibold text-success">+{fmt(p.qty)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-subtext">
+              إجمالي: <span className="font-bold tabular-nums text-text">{fmt(bulkPlan.reduce((a, p) => a + p.qty, 0))}</span> قطعة في {bulkPlan.length} بند
+            </p>
+            {skippedBulk > 0 && (
+              <p className="text-warning">{skippedBulk} بند متحدد مالوش كمية متاحة للتسجيل، مش هيتسجلوا.</p>
+            )}
+          </div>
+          {bulkMachines.length > 0 && (
+            <Field label="المكنة" required={machineRequired} htmlFor="sheet-bulk-machine">
+              <select id="sheet-bulk-machine" value={bulkMachine} onChange={e => setBulkMachine(e.target.value)} className="eg-select">
+                <option value="">— بدون تحديد —</option>
+                {bulkMachines.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </Field>
+          )}
+          <button type="button" onClick={runBulk} disabled={bulkBusy || bulkPlan.length === 0} className="eg-btn-success w-full justify-center">
+            {bulkBusy ? "جاري التسجيل..." : "تأكيد التسجيل"}
+          </button>
+        </div>
+      </Modal>
 
       {/* ── مودال التسجيل ── */}
       <Modal open={!!logTarget} onClose={() => setLogTarget(null)}
