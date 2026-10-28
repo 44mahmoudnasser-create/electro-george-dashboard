@@ -13,7 +13,7 @@ import { Page, PageHeader, PageBody } from "@/components/ui/Page";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
-  Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown, ShoppingCart, Save, ExternalLink, Package,
+  Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown, ShoppingCart, Save, ExternalLink, Package, PackageCheck,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------
@@ -74,6 +74,8 @@ export default function PurchasesClient({
   const toast = useToast();
   const confirm = useConfirm();
   const [orders, setOrders] = useState<PurchaseOrder[]>(initialOrders);
+  // بنود محددة للتسجيل الجماعي للتوريد (بتتحدد بالـ checkbox)
+  const [selItems, setSelItems] = useState<Set<number>>(new Set());
   const todayStr = today();
   const isAdmin = role === "admin";
 
@@ -249,6 +251,37 @@ export default function PurchasesClient({
   // ---------------------------------------------------------------------
   // حذف بند / حذف أمر شراء كامل
   // ---------------------------------------------------------------------
+  // تسجيل التوريد: البند بيتحول لـ "تم التوريد"، ولو مفيش تاريخ توريد بيتحط تاريخ النهاردة
+  const markSupplied = async (orderId: number, list: PurchaseItem[]) => {
+    const open = list.filter(it => it.status === "مفتوح");
+    if (open.length === 0) { toast.error("مفيش بنود مفتوحة للتسجيل"); return; }
+    const ok = await confirm({
+      title: open.length === 1 ? "تسجيل توريد البند؟" : `تسجيل توريد ${open.length} بند؟`,
+      message: <>هيتسجلوا كـ <span className="font-semibold text-text">تم التوريد</span>.</>,
+      confirmText: "تسجيل التوريد",
+    });
+    if (!ok) return;
+    const withDate = open.filter(it => it.supply_date).map(it => it.id);
+    const withoutDate = open.filter(it => !it.supply_date).map(it => it.id);
+    if (withDate.length) {
+      const { error } = await supabase.from("purchase_items").update({ status: "تم التوريد" }).in("id", withDate);
+      if (error) { toast.error(error.message); return; }
+    }
+    if (withoutDate.length) {
+      const { error } = await supabase.from("purchase_items")
+        .update({ status: "تم التوريد", supply_date: todayStr }).in("id", withoutDate);
+      if (error) { toast.error(error.message); return; }
+    }
+    const doneIds = new Set(open.map(it => it.id));
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      purchase_items: o.purchase_items.map(it => doneIds.has(it.id)
+        ? { ...it, status: "تم التوريد", supply_date: it.supply_date ?? todayStr } : it),
+    } : o));
+    setSelItems(prev => { const n = new Set(prev); doneIds.forEach(id => n.delete(id)); return n; });
+    toast.success(`تم تسجيل توريد ${open.length} بند`);
+  };
+
   const removeItem = async (orderId: number, item: PurchaseItem) => {
     const ok = await confirm({
       title: "حذف هذا البند؟",
@@ -365,11 +398,26 @@ export default function PurchasesClient({
                     </div>
                   </summary>
 
+                  {isAdmin && (() => {
+                    const selHere = order.purchase_items.filter(it => selItems.has(it.id));
+                    return selHere.length > 0 ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-accent/5 px-4 py-2">
+                        <span className="text-xs text-text">تم تحديد <span className="font-bold tabular-nums">{selHere.length}</span> بند</span>
+                        <div className="flex items-center gap-2">
+                          <button type="button" onClick={() => setSelItems(new Set())} className="eg-btn-ghost eg-btn-sm">إلغاء</button>
+                          <button type="button" onClick={() => markSupplied(order.id, selHere)} className="eg-btn-primary eg-btn-sm">
+                            <PackageCheck className="size-3.5" />تسجيل التوريد
+                          </button>
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
                   {count > 0 ? (
                     <div className="overflow-x-auto">
                       <table className="eg-table min-w-[600px]">
                         <thead>
                           <tr>
+                            {isAdmin && <th className="w-10"><span className="sr-only">تحديد</span></th>}
                             <th>الصنف</th>
                             <th className="w-24">الكمية</th>
                             <th className="w-24">الفئة</th>
@@ -383,6 +431,18 @@ export default function PurchasesClient({
                             const late = !!item.supply_date && item.supply_date < todayStr && item.status === "مفتوح";
                             return (
                               <tr key={item.id}>
+                                {isAdmin && (
+                                  <td>
+                                    {item.status === "مفتوح" && (
+                                      <input type="checkbox" aria-label={`تحديد ${item.item_name}`}
+                                        checked={selItems.has(item.id)}
+                                        onChange={() => setSelItems(prev => {
+                                          const n = new Set(prev); n.has(item.id) ? n.delete(item.id) : n.add(item.id); return n;
+                                        })}
+                                        className="accent-emerald-500 size-4 cursor-pointer" />
+                                    )}
+                                  </td>
+                                )}
                                 <td className="font-medium text-text">{item.item_name}</td>
                                 <td className="tabular-nums">{item.quantity}</td>
                                 <td className="text-subtext">{item.category}</td>
@@ -394,6 +454,14 @@ export default function PurchasesClient({
                                 {isAdmin && (
                                   <td>
                                     <div className="flex items-center justify-end gap-0.5">
+                                      {item.status === "مفتوح" && (
+                                        <Tooltip content="تسجيل التوريد">
+                                          <button type="button" onClick={() => markSupplied(order.id, [item])}
+                                            className="eg-icon-btn" aria-label="تسجيل توريد البند">
+                                            <PackageCheck className="size-3.5" />
+                                          </button>
+                                        </Tooltip>
+                                      )}
                                       <Tooltip content="تعديل">
                                         <button type="button" onClick={() => openEditItem(item)}
                                           className="eg-icon-btn" aria-label="تعديل البند">
