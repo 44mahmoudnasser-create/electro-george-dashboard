@@ -34,11 +34,11 @@ function titleFor(month: string) {
 }
 
 // ارتفاع الصف بيتحسب من طول النص وعرض العمود (Arial 10 تقريباً 1.15 حرف لكل وحدة عرض)
-const LINE_PT = 13;
+const LINE_PT = 13.5;
 const linesFor = (value: any, colWidth: number) => {
   if (value === null || value === undefined || value === "") return 1;
   const text = value instanceof Date ? "00/00/00" : String(value);
-  const perLine = Math.max(4, Math.floor(colWidth * 1.15));
+  const perLine = Math.max(4, Math.floor(colWidth * 0.95));   // أقل من الحقيقي عشان النص ما يتقصش
   return text.split("\n").reduce((n, part) => n + Math.max(1, Math.ceil(part.length / perLine)), 0);
 };
 
@@ -70,10 +70,16 @@ export async function buildExpectedInvoice(allWos: InvoiceWO[], allItems: Invoic
   oldMerges.forEach((m: any) => {
     if (m.top >= DATA_START) ws.unMergeCells(m.top, m.left, m.bottom, m.right);
   });
-  // امسح القيم والدمج في منطقة البيانات
-  const lastRow = Math.max(ws.rowCount, DATA_START);
+  // امسح منطقة البيانات القديمة بالكامل: قيم + حدود + تعبئة + ارتفاع (عشان مايفضلش صناديق فاضية من الـ template)
+  const lastRow = Math.max(ws.rowCount, DATA_START + 60);
   for (let r = DATA_START; r <= lastRow; r++) {
-    for (let c = 1; c <= COLS; c++) ws.getCell(r, c).value = null;
+    ws.getRow(r).height = 16.05;
+    for (let c = 1; c <= COLS; c++) {
+      const cell = ws.getCell(r, c);
+      cell.value = null;
+      cell.border = {};
+      cell.fill = { type: "pattern", pattern: "none" };
+    }
   }
 
   // ستايل صف البيانات من الـ template (أول صف بيانات) عشان أي خلية جديدة تاخده
@@ -85,6 +91,9 @@ export async function buildExpectedInvoice(allWos: InvoiceWO[], allItems: Invoic
     cell.value = value;
     cell.style = styleOf(c) as any;
     cell.alignment = { horizontal: center ? "center" : "left", vertical: "middle", wrapText: true };
+    const thin = { style: "thin" as const, color: { argb: "FF000000" } };
+    cell.border = { top: thin, left: thin, bottom: thin, right: thin };
+    cell.fill = { type: "pattern", pattern: "none" };
   };
 
   wos.forEach(wo => {
@@ -133,7 +142,7 @@ export async function buildExpectedInvoice(allWos: InvoiceWO[], allItems: Invoic
       for (let k = 0; k < span; k++) need[k] = Math.max(need[k], perRow);
     }
     need.forEach((lines, k) => {
-      ws.getRow(start + k).height = Math.max(16.05, lines * LINE_PT + 3);
+      ws.getRow(start + k).height = Math.max(16.05, lines * LINE_PT + 5);
     });
 
     // دمج الخلايا اللي بتتكرر للأمر الواحد (زي الـ template)
