@@ -13,6 +13,8 @@ import { Page, PageHeader, PageBody } from "@/components/ui/Page";
 import { FilterChip, ChipRow, SearchInput } from "@/components/ui/Filters";
 import { Plus, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ClipboardList, EyeOff, Printer } from "lucide-react";
 import PrintWorkOrders from "./PrintWorkOrders";
+import { downloadExpectedInvoice } from "@/lib/expected-invoice";
+import { FileSpreadsheet } from "lucide-react";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"] as const;
@@ -151,6 +153,12 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
             <option value="الكل">كل الأولويات</option>
             {PRIORITIES.map(p => <option key={p}>{p}</option>)}
           </select>
+          <button onClick={async () => {
+            try { await downloadExpectedInvoice(visible, initialItems); }
+            catch (e) { alert((e as Error).message); }
+          }} className="eg-btn-ghost eg-btn-sm" title="تحميل الأوامر المعروضة بنفس قالب Excel">
+            <FileSpreadsheet className="size-3.5" />تحميل Excel
+          </button>
           <button onClick={() => window.print()} className="eg-btn-ghost eg-btn-sm" title="طباعة الأوامر المعروضة">
             <Printer className="size-3.5" />طباعة
           </button>
