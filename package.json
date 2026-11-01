@@ -14,6 +14,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "docxtemplater": "^3.71.1",
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.400.0",
     "next": "14.2.5",
     "next-pwa": "^5.6.0",
