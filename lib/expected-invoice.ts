@@ -28,20 +28,19 @@ const monthName = (ym: string) => {
   return { y, label: new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", { month: "long", timeZone: "UTC" }) };
 };
 
-function titleFor(wos: InvoiceWO[], items: InvoiceItem[]) {
-  const ids = new Set(wos.map(w => w.id));
-  const counts = new Map<string, number>();
-  items.filter(i => ids.has(i.wo_id) && i.plan_month).forEach(i => {
-    counts.set(i.plan_month!, (counts.get(i.plan_month!) ?? 0) + 1);
-  });
-  let key = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
-  if (!key) {
-    const now = new Date();
-    key = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  }
-  const { y, label } = monthName(key);
+function titleFor(month: string) {
+  const { y, label } = monthName(month);
   return `Expected invoice for ${label} ${y}`;
 }
+
+// ارتفاع الصف بيتحسب من طول النص وعرض العمود (Arial 10 تقريباً 1.15 حرف لكل وحدة عرض)
+const LINE_PT = 13;
+const linesFor = (value: any, colWidth: number) => {
+  if (value === null || value === undefined || value === "") return 1;
+  const text = value instanceof Date ? "00/00/00" : String(value);
+  const perLine = Math.max(4, Math.floor(colWidth * 1.15));
+  return text.split("\n").reduce((n, part) => n + Math.max(1, Math.ceil(part.length / perLine)), 0);
+};
 
 const fmtDate = (iso: string | null) => {
   if (!iso) return null;
@@ -51,7 +50,12 @@ const fmtDate = (iso: string | null) => {
 };
 const fmtPlan = (ym: string | null) => (ym ? monthName(ym).label : null);
 
-export async function buildExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[]): Promise<ArrayBuffer> {
+export async function buildExpectedInvoice(allWos: InvoiceWO[], allItems: InvoiceItem[], month: string): Promise<ArrayBuffer> {
+  // بنعرض بس البنود اللي خطتها في الشهر المختار، والأوامر اللي ليها بنود بالشهر ده
+  const items = allItems.filter(i => i.plan_month === month);
+  const wosWithItems = new Set(items.map(i => i.wo_id));
+  const wos = allWos.filter(w => wosWithItems.has(w.id));
+
   const res = await fetch("/templates/expected-invoice-template.xlsx");
   if (!res.ok) throw new Error("مش لاقي قالب الـ Excel");
   const wb = new ExcelJS.Workbook();
@@ -59,7 +63,7 @@ export async function buildExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[
   const ws = wb.worksheets[0];
 
   // العنوان
-  ws.getCell(1, 1).value = titleFor(wos, items);
+  ws.getCell(1, 1).value = titleFor(month);
 
   // شيل الدمج القديم من منطقة البيانات (العنوان فوق بيفضل زي ما هو)
   const oldMerges = Object.values((ws as any)._merges ?? {}).map((m: any) => m.model);
@@ -112,6 +116,26 @@ export async function buildExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[
       }
     }
 
+    // ارتفاع الصفوف: كل صف على قد أطول نص فيه، والخلايا المدموجة بتتوزع على صفوف الأمر
+    const widthOf = (c: number) => Number(ws.getColumn(c).width) || 10;
+    const need: number[] = Array.from({ length: span }, () => 1);
+    for (let k = 0; k < span; k++) {
+      const it = its[k];
+      need[k] = Math.max(need[k], linesFor(it?.description ?? null, widthOf(4)), linesFor(it?.qty ?? null, widthOf(5)));
+    }
+    if (span > 0) {
+      const mergedNeed = Math.max(
+        linesFor(wo.wo_number, widthOf(1)), linesFor(wo.client_name, widthOf(2)), linesFor(wo.project_name, widthOf(3)),
+        linesFor(wo.description, widthOf(7)), linesFor(first?.expected_delivery ? "00/00/00" : null, widthOf(6)),
+        linesFor(fmtPlan(first?.plan_month ?? null), widthOf(8)),
+      );
+      const perRow = Math.ceil(mergedNeed / span);
+      for (let k = 0; k < span; k++) need[k] = Math.max(need[k], perRow);
+    }
+    need.forEach((lines, k) => {
+      ws.getRow(start + k).height = Math.max(16.05, lines * LINE_PT + 3);
+    });
+
     // دمج الخلايا اللي بتتكرر للأمر الواحد (زي الـ template)
     if (span > 1) {
       const end = start + span - 1;
@@ -125,13 +149,13 @@ export async function buildExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[
   return buf as ArrayBuffer;
 }
 
-export async function downloadExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[]) {
-  const buf = await buildExpectedInvoice(wos, items);
+export async function downloadExpectedInvoice(wos: InvoiceWO[], items: InvoiceItem[], month: string) {
+  const buf = await buildExpectedInvoice(wos, items, month);
   const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "Expected_invoice.xlsx";
+  a.download = `Expected_invoice_${month}.xlsx`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
