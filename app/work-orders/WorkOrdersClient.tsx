@@ -50,6 +50,8 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
   const [sortCol, setSortCol] = useState<SortCol>("created_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [addOpen, setAddOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
 
   const [saving, setSaving] = useState(false);
@@ -138,6 +140,20 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
 
   const sortProps = { sortCol, sortDir, onSort: toggleSort };
 
+  const defaultInvoiceMonth = useMemo(() => {
+    const ids = new Set(visible.map(w => w.id));
+    const counts = new Map<string, number>();
+    initialItems.filter(i => ids.has(i.wo_id) && i.plan_month).forEach(i => {
+      counts.set(i.plan_month, (counts.get(i.plan_month) ?? 0) + 1);
+    });
+    const top = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (top) return top;
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, [visible, initialItems]);
+  const [invoiceMonth, setInvoiceMonth] = useState("");
+  const chosenMonth = invoiceMonth || defaultInvoiceMonth;
+  const invoiceCount = initialItems.filter(i => i.plan_month === chosenMonth && visible.some(w => w.id === i.wo_id)).length;
   return (
     <>
     <div className="print:hidden">
@@ -153,10 +169,7 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
             <option value="الكل">كل الأولويات</option>
             {PRIORITIES.map(p => <option key={p}>{p}</option>)}
           </select>
-          <button onClick={async () => {
-            try { await downloadExpectedInvoice(visible, initialItems); }
-            catch (e) { alert((e as Error).message); }
-          }} className="eg-btn-ghost eg-btn-sm" title="تحميل الأوامر المعروضة بنفس قالب Excel">
+          <button onClick={() => setInvoiceOpen(true)} className="eg-btn-ghost eg-btn-sm" title="تحميل الأوامر بنفس قالب Excel">
             <FileSpreadsheet className="size-3.5" />تحميل Excel
           </button>
           <button onClick={() => window.print()} className="eg-btn-ghost eg-btn-sm" title="طباعة الأوامر المعروضة">
@@ -307,6 +320,34 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
             {saving ? "جاري الحفظ..." : "حفظ وفتح الأمر"}
           </button>
         </form>
+      </Modal>
+      <Modal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} title="تحميل Expected invoice" size="sm">
+        <div className="space-y-4">
+          <div>
+            <label className="eg-label">اختار الشهر</label>
+            <input type="month" value={chosenMonth} onChange={e => setInvoiceMonth(e.target.value)} className="eg-input" />
+            <p className="mt-1.5 text-[11px] text-subtext">
+              {invoiceCount} بند خطتهم في الشهر ده، والتقرير هيتحمل بيهم بس.
+            </p>
+          </div>
+          <button
+            disabled={invoiceBusy || invoiceCount === 0 || !chosenMonth}
+            onClick={async () => {
+              setInvoiceBusy(true);
+              try {
+                await downloadExpectedInvoice(visible, initialItems, chosenMonth);
+                setInvoiceOpen(false);
+              } catch (e) {
+                alert((e as Error).message);
+              } finally {
+                setInvoiceBusy(false);
+              }
+            }}
+            className="eg-btn-primary w-full justify-center"
+          >
+            <FileSpreadsheet className="size-3.5" />{invoiceBusy ? "جاري التحميل..." : "تحميل Excel"}
+          </button>
+        </div>
       </Modal>
     </Page>
     </div>
