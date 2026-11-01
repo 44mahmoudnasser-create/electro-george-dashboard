@@ -11,7 +11,8 @@ import Field, { FormError } from "@/components/ui/Field";
 import Spinner from "@/components/ui/Spinner";
 import { Page, PageHeader, PageBody } from "@/components/ui/Page";
 import { FilterChip, ChipRow, SearchInput } from "@/components/ui/Filters";
-import { Plus, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ClipboardList, EyeOff } from "lucide-react";
+import { Plus, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ClipboardList, EyeOff, Printer } from "lucide-react";
+import PrintWorkOrders from "./PrintWorkOrders";
 
 const STATUSES = ["لم يبدأ", "جاري", "متوقف", "مكتمل", "تم التسليم"] as const;
 const PRIORITIES = ["منخفضة", "متوسطة", "عالية", "عاجلة"] as const;
@@ -32,7 +33,7 @@ type SortCol = "wo_number" | "status" | "created_date" | "expected_delivery" | "
 
 const EMPTY_FORM = { wo_number: "", client_name: "", project_name: "", description: "", status: "لم يبدأ", expected_delivery: "", priority: "متوسطة", plan_month: "" };
 
-export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign }: { initialWOs: WO[]; role: string; canCreate: boolean; isDesign: boolean }) {
+export default function WorkOrdersClient({ initialWOs, initialItems, role, canCreate, isDesign }: { initialWOs: WO[]; initialItems: any[]; role: string; canCreate: boolean; isDesign: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const todayStr = today();
@@ -136,6 +137,8 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
   const sortProps = { sortCol, sortDir, onSort: toggleSort };
 
   return (
+    <>
+    <div className="print:hidden">
     <Page width="7xl">
       <PageHeader
         title="أوامر الشغل"
@@ -148,6 +151,9 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
             <option value="الكل">كل الأولويات</option>
             {PRIORITIES.map(p => <option key={p}>{p}</option>)}
           </select>
+          <button onClick={() => window.print()} className="eg-btn-ghost eg-btn-sm" title="طباعة الأوامر المعروضة">
+            <Printer className="size-3.5" />طباعة
+          </button>
           {canCreate && (
             <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
               <Plus className="size-3.5" />أمر شغل جديد
@@ -295,6 +301,9 @@ export default function WorkOrdersClient({ initialWOs, role, canCreate, isDesign
         </form>
       </Modal>
     </Page>
+    </div>
+    <PrintWorkOrders wos={visible} items={initialItems} title="قائمة أوامر الشغل" />
+    </>
   );
 }
 
