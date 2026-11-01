@@ -302,7 +302,7 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
       </Modal>
     </Page>
     </div>
-    <PrintWorkOrders wos={visible} items={initialItems} title="قائمة أوامر الشغل" />
+    <PrintWorkOrders wos={visible} items={initialItems} />
     </>
   );
 }
