@@ -34,7 +34,7 @@ type AssignableItem = { id: number; wo_id: number; item_no: number; description:
 type Tab = "daily" | "stats";
 
 export default function AttendanceClient({
-  initialTechnicians, role, department, isManager, departments, initialYearAttendance,
+  initialTechnicians, role, department, isManager, departments, initialYearAttendance, assignableItems,
 }: {
   initialTechnicians: Technician[];
   role: string;
