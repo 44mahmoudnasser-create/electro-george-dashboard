@@ -45,18 +45,11 @@ export default async function AttendancePage() {
     if (!data || data.length < PAGE) break;
   }
 
-  // المجاميع (لكل قسم) + أعضائها + أسماء الأقسام
-  const [{ data: groupRows }, { data: memberRows }, { data: deptList }] = await Promise.all([
-    supabase.from("assembly_groups")
-      .select("id, name, department_code, supervisor_id, supervisor:technicians(name)")
-      .eq("active", true).order("name"),
-    supabase.from("assembly_group_members").select("group_id, tech_id"),
-    supabase.from("departments").select("code, name_ar").eq("active", true).order("sort_no"),
+  // مجموعات الأقسام (مشرف + أعضاء)
+  const [{ data: groupRows }, { data: memberRows }] = await Promise.all([
+    supabase.from("department_groups").select("id, department, name, supervisor_id").order("name"),
+    supabase.from("department_group_members").select("group_id, tech_id"),
   ]);
-  const groups = (groupRows ?? []).map((g: any) => ({
-    id: g.id, name: g.name, department_code: g.department_code, supervisor_id: g.supervisor_id ?? null,
-    supervisorName: (Array.isArray(g.supervisor) ? g.supervisor[0]?.name : g.supervisor?.name) ?? null,
-  }));
 
   // البنود المعتمدة اللي ممكن تتعين عليها الفنيين
   const { data: itemRows } = await supabase
@@ -77,9 +70,8 @@ export default async function AttendancePage() {
     <AppShell role={role}>
       <AttendanceClient
         assignableItems={assignableItems}
-        groups={groups}
+        groups={(groupRows ?? []) as any[]}
         groupMembers={(memberRows ?? []) as any[]}
-        departmentList={(deptList ?? []) as any[]}
         initialTechnicians={technicians ?? []}
         role={role}
         department={department}
