@@ -16,7 +16,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
   Save, RefreshCw, ChevronDown, Printer, CalendarCheck, ClipboardCheck, BarChart3,
-  Users, UserX, CalendarX2, Palmtree, Briefcase,
+  Users, UserX, CalendarX2, Palmtree, Briefcase, Download,
 } from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 
@@ -271,6 +271,45 @@ export default function AttendanceClient({
     };
   }).sort((a, b) => b.absent - a.absent), [visibleTechnicians, monthRecords]);
 
+  // إحصائيات الأقسام للشهر (نفس الفنيين اللي شايفهم الصفحة)
+  const deptMonthly = useMemo(() => {
+    const groups = new Map<string, { dept: string; techs: number; present: number; absent: number; leave: number; mission: number }>();
+    visibleTechnicians.forEach(t => {
+      const key = t.department || "بدون قسم";
+      if (!groups.has(key)) groups.set(key, { dept: key, techs: 0, present: 0, absent: 0, leave: 0, mission: 0 });
+      const g = groups.get(key)!;
+      const recs = monthRecords.filter(r => r.tech_id === t.id);
+      g.techs += 1;
+      g.present += count(recs, "حاضر");
+      g.absent += count(recs, "غياب");
+      g.leave += count(recs, "أجازة");
+      g.mission += count(recs, "مأمورية");
+    });
+    return Array.from(groups.values()).sort((a, b) => a.dept.localeCompare(b.dept, "ar"));
+  }, [visibleTechnicians, monthRecords]);
+
+  // تصدير إحصائيات الأقسام لملف CSV (بيتفتح عربي في Excel)
+  const exportDeptStats = () => {
+    if (deptMonthly.length === 0) { toast.error("مفيش بيانات للتصدير"); return; }
+    const head = ["القسم", "عدد الفنيين", "أيام الحضور", "أيام الغياب", "أيام الإجازة", "أيام المأمورية"];
+    const body = deptMonthly.map(g => [g.dept, g.techs, g.present, g.absent, g.leave, g.mission]);
+    const sum = (k: "techs" | "present" | "absent" | "leave" | "mission") =>
+      deptMonthly.reduce((a, g) => a + g[k], 0);
+    const total = ["الإجمالي", sum("techs"), sum("present"), sum("absent"), sum("leave"), sum("mission")];
+    const rows: (string | number)[][] = [[`إحصائيات الأقسام — ${monthLabel}`], head, ...body, total];
+    const csv = rows
+      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `احصائيات_الاقسام_${statsMonth}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast.success("اتصدّرت إحصائيات الأقسام");
+  };
+
   const monthLabel = useMemo(() => {
     const [y, m] = statsMonth.split("-").map(Number);
     if (!y || !m) return statsMonth;
@@ -420,8 +459,14 @@ export default function AttendanceClient({
               title={`إحصائيات ${monthLabel}`}
               description="اضغط على أي فني علشان تشوف أيامه في الشهر."
               actions={
-                <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
-                  aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
+                <div className="flex items-center gap-2">
+                  <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
+                    aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
+                  <button type="button" onClick={exportDeptStats} disabled={deptMonthly.length === 0}
+                    className="eg-btn-ghost eg-btn-sm disabled:opacity-40">
+                    <Download className="size-3.5" />تصدير الأقسام
+                  </button>
+                </div>
               }
             />
 
