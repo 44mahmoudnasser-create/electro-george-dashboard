@@ -19,6 +19,8 @@ import {
   Users, UserX, CalendarX2, Palmtree, Briefcase, Download,
 } from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
+import Modal from "@/components/ui/Modal";
+import Field from "@/components/ui/Field";
 
 const NOT_RECORDED = "—";
 const ATT_OPTS = [NOT_RECORDED, "حاضر", "غياب", "أجازة", "مأمورية"];
@@ -26,6 +28,9 @@ const PERM_OPTS = ["—", "إذن ساعتين صباحي", "إذن ساعتين
 
 type AttRow = { tech_id: number; status: string; permission: string; overtime: boolean };
 type YearAttRow = { tech_id: number; date: string; status: string };
+// تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
+type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
+type AssignableItem = { id: number; wo_id: number; item_no: number; description: string | null; wo_number: string };
 type Tab = "daily" | "stats";
 
 export default function AttendanceClient({
@@ -37,6 +42,7 @@ export default function AttendanceClient({
   isManager: boolean;
   departments: string[];
   initialYearAttendance: YearAttRow[];
+  assignableItems: AssignableItem[];
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -46,6 +52,9 @@ export default function AttendanceClient({
   const [rows, setRows] = useState<AttRow[]>([]);
   // "[]" مش "" علشان شارة "تغييرات غير محفوظة" ماتظهرش قبل أول تحميل
   const [savedSnapshot, setSavedSnapshot] = useState("[]");
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [assignSnapshot, setAssignSnapshot] = useState("[]");
+  const [assignTech, setAssignTech] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -61,7 +70,10 @@ export default function AttendanceClient({
   const techById = useMemo(() => new Map(visibleTechnicians.map(t => [t.id, t])), [visibleTechnicians]);
   const visibleTechIds = useMemo(() => new Set(visibleTechnicians.map(t => t.id)), [visibleTechnicians]);
 
-  const dirty = useMemo(() => JSON.stringify(rows) !== savedSnapshot, [rows, savedSnapshot]);
+  const dirty = useMemo(
+    () => JSON.stringify(rows) !== savedSnapshot || JSON.stringify(assignments) !== assignSnapshot,
+    [rows, savedSnapshot, assignments, assignSnapshot]
+  );
 
   /* ─────────── تحميل يوم ─────────── */
   const load = async () => {
@@ -71,11 +83,24 @@ export default function AttendanceClient({
       setRows([]); setSavedSnapshot("[]"); setLoading(false);
       return;
     }
-    const [att, perm, ot] = await Promise.all([
+    const [att, perm, ot, asg] = await Promise.all([
       supabase.from("attendance").select("tech_id,status").eq("date", date).in("tech_id", techIds),
       supabase.from("permissions").select("tech_id,permission_type").eq("date", date).in("tech_id", techIds),
       supabase.from("overtime").select("tech_id,has_overtime").eq("date", date).in("tech_id", techIds),
+      supabase.from("technician_assignments")
+        .select("id, tech_id, work_order_item_id, task, item:work_order_items(wo_id)")
+        .eq("date", date).in("tech_id", techIds).order("id", { ascending: true }),
     ]);
+    const asgNext: Assignment[] = (asg.data ?? []).map((r: any) => ({
+      key: `s${r.id}`,
+      id: r.id,
+      tech_id: r.tech_id,
+      item_id: r.work_order_item_id,
+      wo_id: (Array.isArray(r.item) ? r.item[0]?.wo_id : r.item?.wo_id) ?? null,
+      task: r.task ?? "",
+    }));
+    setAssignments(asgNext);
+    setAssignSnapshot(JSON.stringify(asgNext));
     const attMap = Object.fromEntries((att.data ?? []).map(r => [r.tech_id, r.status]));
     const permMap = Object.fromEntries((perm.data ?? []).map(r => [r.tech_id, r.permission_type]));
     const otMap = Object.fromEntries((ot.data ?? []).map(r => [r.tech_id, r.has_overtime]));
@@ -124,7 +149,9 @@ export default function AttendanceClient({
       const s = saved.get(r.tech_id);
       return !s || s.status !== r.status || s.permission !== r.permission || s.overtime !== r.overtime;
     });
-    if (changed.length === 0) {
+    const savedAssign: Assignment[] = JSON.parse(assignSnapshot || "[]");
+    const assignChanged = JSON.stringify(assignments) !== assignSnapshot;
+    if (changed.length === 0 && !assignChanged) {
       toast.info("مفيش تغييرات تتحفظ");
       return;
     }
@@ -162,6 +189,25 @@ export default function AttendanceClient({
         ops.push(supabase.from("permissions").delete().in("tech_id", permDeleteIds).eq("date", date));
       }
 
+      // التعيينات: اللي اتشالت، واللي اتضافت، واللي اتغير بندها أو نصها
+      const keepIds = new Set(assignments.filter(a => a.id && a.item_id).map(a => a.id!));
+      const asgDeleteIds = savedAssign.filter(a => a.id && !keepIds.has(a.id)).map(a => a.id!);
+      const asgInserts = assignments
+        .filter(a => !a.id && a.item_id)
+        .map(a => ({ tech_id: a.tech_id, date, work_order_item_id: a.item_id, task: a.task.trim() || null }));
+      const asgUpdates = assignments.filter(a => {
+        if (!a.id || !a.item_id) return false;
+        const s0 = savedAssign.find(x => x.id === a.id);
+        return !!s0 && (s0.item_id !== a.item_id || s0.task !== a.task);
+      });
+      if (asgDeleteIds.length) ops.push(supabase.from("technician_assignments").delete().in("id", asgDeleteIds));
+      if (asgInserts.length) ops.push(supabase.from("technician_assignments").insert(asgInserts));
+      asgUpdates.forEach(a => ops.push(
+        supabase.from("technician_assignments")
+          .update({ work_order_item_id: a.item_id, task: a.task.trim() || null })
+          .eq("id", a.id!)
+      ));
+
       const results = await Promise.all(ops);
       const failed = results.find(r => r.error);
       if (failed?.error) throw new Error(failed.error.message);
@@ -172,6 +218,7 @@ export default function AttendanceClient({
     }
     setSaving(false);
     setSavedSnapshot(JSON.stringify(rows));
+    await load();   // نجيب التعيينات بالـ IDs الجديدة
 
     if (date.slice(0, 4) === today().slice(0, 4)) {
       setYearAttendance(prev => {
@@ -269,7 +316,21 @@ export default function AttendanceClient({
       mission: count(recs, "مأمورية"),
       records: recs.slice().sort((a, b) => b.date.localeCompare(a.date)),
     };
-  }).sort((a, b) => b.absent - a.absent), [visibleTechnicians, monthRecords]);
+  }).sort((a, b) =>
+    (a.tech.department || "").localeCompare(b.tech.department || "", "ar") || b.absent - a.absent
+  ), [visibleTechnicians, monthRecords]);
+
+  // مجاميع كل قسم (بتتعرض جوه جدول الفنيين)
+  const deptTotals = useMemo(() => {
+    const m = new Map<string, { techs: number; present: number; absent: number; leave: number; mission: number }>();
+    perTechMonthly.forEach(r => {
+      const k = r.tech.department || "بدون قسم";
+      const g = m.get(k) ?? { techs: 0, present: 0, absent: 0, leave: 0, mission: 0 };
+      g.techs += 1; g.present += r.present; g.absent += r.absent; g.leave += r.leave; g.mission += r.mission;
+      m.set(k, g);
+    });
+    return m;
+  }, [perTechMonthly]);
 
   // إحصائيات الأقسام للشهر (نفس الفنيين اللي شايفهم الصفحة)
   const deptMonthly = useMemo(() => {
@@ -398,6 +459,7 @@ export default function AttendanceClient({
                         <th>الاسم</th>
                         <th className="w-44">الحضور</th>
                         <th className="w-56">الإذن</th>
+                        <th className="w-32 text-center">التعيين</th>
                         <th className="w-24 text-center">عمل إضافي</th>
                       </tr>
                     </thead>
@@ -439,6 +501,12 @@ export default function AttendanceClient({
                               </select>
                             </td>
                             <td className="text-center">
+                              <button type="button" onClick={() => setAssignTech(r.tech_id)}
+                                aria-label={`تعيين ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
+                                {assignments.filter(a => a.tech_id === r.tech_id).length || "+"} تعيين
+                              </button>
+                            </td>
+                            <td className="text-center">
                               <input type="checkbox" checked={r.overtime}
                                 onChange={e => setRow(r.tech_id, { overtime: e.target.checked })}
                                 aria-label={`عمل إضافي ${tech.name}`} className="align-middle" />
@@ -462,10 +530,6 @@ export default function AttendanceClient({
                 <div className="flex items-center gap-2">
                   <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
                     aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
-                  <button type="button" onClick={exportDeptStats} disabled={deptMonthly.length === 0}
-                    className="eg-btn-ghost eg-btn-sm disabled:opacity-40">
-                    <Download className="size-3.5" />تصدير الأقسام
-                  </button>
                 </div>
               }
             />
@@ -496,10 +560,20 @@ export default function AttendanceClient({
                       </tr>
                     </thead>
                     <tbody>
-                      {perTechMonthly.map(({ tech, present, absent, leave, mission, records }) => {
+                      {perTechMonthly.map((row, idx) => {
+                        const { tech, present, absent, leave, mission, records } = row;
                         const open = expandedTech === tech.id;
+                        const dept = tech.department || "بدون قسم";
+                        const prevDept = perTechMonthly[idx - 1]?.tech.department || "بدون قسم";
+                        const nextDept = perTechMonthly[idx + 1]?.tech.department || "بدون قسم";
+                        const totals = deptTotals.get(dept);
                         return (
                           <Fragment key={tech.id}>
+                            {idx === 0 || prevDept !== dept ? (
+                              <tr className="bg-card2/70">
+                                <td colSpan={6} className="text-xs font-bold text-accent">{dept}</td>
+                              </tr>
+                            ) : null}
                             <tr onClick={() => setExpandedTech(open ? null : tech.id)}
                               className={cn("cursor-pointer", open && "bg-accent/[0.06] [&>td]:border-b-0")}>
                               <td className="font-medium text-text">{tech.name}</td>
@@ -534,6 +608,16 @@ export default function AttendanceClient({
                                 </td>
                               </tr>
                             )}
+                            {idx === perTechMonthly.length - 1 || nextDept !== dept ? (
+                              <tr className="border-t-2 border-border bg-accent/5 font-semibold">
+                                <td className="text-text">مجموع {dept} ({totals?.techs ?? 0} فني)</td>
+                                <td className="text-center tabular-nums text-success">{totals?.present ?? 0}</td>
+                                <td className="text-center tabular-nums text-danger">{totals?.absent ?? 0}</td>
+                                <td className="text-center tabular-nums text-warning">{totals?.leave ?? 0}</td>
+                                <td className="text-center tabular-nums text-accent">{totals?.mission ?? 0}</td>
+                                <td />
+                              </tr>
+                            ) : null}
                           </Fragment>
                         );
                       })}
@@ -545,6 +629,58 @@ export default function AttendanceClient({
           </>
         )}
       </PageBody>
+
+      {/* ── تعيين الفني على بنود الأوامر ── */}
+      <Modal open={assignTech !== null} onClose={() => setAssignTech(null)}
+        title={`تعيين ${techById.get(assignTech ?? -1)?.name ?? ""}`} description={`يوم ${date}`} size="md">
+        <div className="space-y-3">
+          {assignments.filter(a => a.tech_id === assignTech).length === 0 && (
+            <p className="text-xs text-subtext">مفيش تعيينات للفني ده في اليوم ده</p>
+          )}
+          {assignments.filter(a => a.tech_id === assignTech).map(a => {
+            const woList = Array.from(new Map(assignableItems.map(i => [i.wo_id, i.wo_number])).entries());
+            const itemsOfWo = assignableItems.filter(i => i.wo_id === a.wo_id);
+            const update = (patch: Partial<Assignment>) =>
+              setAssignments(prev => prev.map(x => x.key === a.key ? { ...x, ...patch } : x));
+            return (
+              <div key={a.key} className="grid grid-cols-12 gap-2 items-end rounded-lg border border-border/60 p-2">
+                <div className="col-span-4">
+                  <Field label="أمر الشغل">
+                    <select value={a.wo_id ?? ""} className="eg-select"
+                      onChange={e => update({ wo_id: e.target.value ? Number(e.target.value) : null, item_id: null })}>
+                      <option value="">— اختار —</option>
+                      {woList.map(([id, num]) => <option key={id} value={id}>{num}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div className="col-span-4">
+                  <Field label="البند">
+                    <select value={a.item_id ?? ""} disabled={!a.wo_id} className="eg-select"
+                      onChange={e => update({ item_id: e.target.value ? Number(e.target.value) : null })}>
+                      <option value="">— اختار —</option>
+                      {itemsOfWo.map(i => <option key={i.id} value={i.id}>#{i.item_no} {i.description ?? ""}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div className="col-span-3">
+                  <Field label="العمل المكلف به">
+                    <input value={a.task} onChange={e => update({ task: e.target.value })} className="eg-input" />
+                  </Field>
+                </div>
+                <div className="col-span-1">
+                  <button type="button" aria-label="إزالة"
+                    onClick={() => setAssignments(prev => prev.filter(x => x.key !== a.key))}
+                    className="eg-icon-btn w-full justify-center text-danger">×</button>
+                </div>
+              </div>
+            );
+          })}
+          <button type="button"
+            onClick={() => setAssignments(prev => [...prev, { key: `n${Date.now()}`, tech_id: assignTech!, wo_id: null, item_id: null, task: "" }])}
+            className="eg-btn-ghost eg-btn-sm">+ إضافة تعيين</button>
+          <p className="text-[11px] text-subtext">التعيينات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
+        </div>
+      </Modal>
     </Page>
   );
 }

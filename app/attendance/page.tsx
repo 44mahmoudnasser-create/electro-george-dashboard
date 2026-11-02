@@ -45,9 +45,25 @@ export default async function AttendancePage() {
     if (!data || data.length < PAGE) break;
   }
 
+  // البنود المعتمدة اللي ممكن تتعين عليها الفنيين
+  const { data: itemRows } = await supabase
+    .from("work_order_items")
+    .select("id, wo_id, item_no, description, work_order:work_orders(wo_number)")
+    .eq("status", "approved")
+    .order("wo_id", { ascending: true })
+    .order("item_no", { ascending: true });
+  const assignableItems = (itemRows ?? []).map((i: any) => ({
+    id: i.id,
+    wo_id: i.wo_id,
+    item_no: i.item_no,
+    description: i.description,
+    wo_number: (Array.isArray(i.work_order) ? i.work_order[0]?.wo_number : i.work_order?.wo_number) ?? "—",
+  }));
+
   return (
     <AppShell role={role}>
       <AttendanceClient
+        assignableItems={assignableItems}
         initialTechnicians={technicians ?? []}
         role={role}
         department={department}
