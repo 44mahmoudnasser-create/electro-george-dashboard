@@ -48,13 +48,13 @@ export default async function AttendancePage() {
   // المجاميع (لكل قسم) + أعضائها + أسماء الأقسام
   const [{ data: groupRows }, { data: memberRows }, { data: deptList }] = await Promise.all([
     supabase.from("assembly_groups")
-      .select("id, name, department_code, supervisor:technicians(name)")
+      .select("id, name, department_code, supervisor_id, supervisor:technicians(name)")
       .eq("active", true).order("name"),
     supabase.from("assembly_group_members").select("group_id, tech_id"),
     supabase.from("departments").select("code, name_ar").eq("active", true).order("sort_no"),
   ]);
   const groups = (groupRows ?? []).map((g: any) => ({
-    id: g.id, name: g.name, department_code: g.department_code,
+    id: g.id, name: g.name, department_code: g.department_code, supervisor_id: g.supervisor_id ?? null,
     supervisorName: (Array.isArray(g.supervisor) ? g.supervisor[0]?.name : g.supervisor?.name) ?? null,
   }));
 

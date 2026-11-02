@@ -31,7 +31,7 @@ type AttRow = { tech_id: number; status: string; permission: string; overtime: b
 type YearAttRow = { tech_id: number; date: string; status: string };
 // تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
 type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
-type GroupRow = { id: number; name: string; department_code: string | null; supervisorName: string | null };
+type GroupRow = { id: number; name: string; department_code: string | null; supervisor_id: number | null; supervisorName: string | null };
 type Totals = { techs: number; present: number; absent: number; leave: number; mission: number };
 type FlatItem =
   | { kind: "section"; key: string; label: string }
@@ -335,38 +335,49 @@ export default function AttendanceClient({
     (a.tech.department || "").localeCompare(b.tech.department || "", "ar") || b.absent - a.absent
   ), [visibleTechnicians, monthRecords]);
 
-  // جدول اليوم متقسم حسب القسم: عنوان لكل قسم، ومجموع الحضور/الغياب/الإجازة/المأمورية في آخره
+  // جدول اليوم: كل مجموعة (مشرف + فنيينه) في قائمة لوحدها، والمشرف أول واحد فيها
+  // الفنيين اللي مش في مجموعة بيتجمعوا تحت قسمهم
   const dailyItems = useMemo(() => {
-    const withDept = rows
-      .map(r => ({ r, dept: techById.get(r.tech_id)?.department || "بدون قسم" }))
-      .filter(x => techById.get(x.r.tech_id));
-    withDept.sort((a, b) => a.dept.localeCompare(b.dept, "ar"));
-    type Item = { kind: "head"; dept: string } | { kind: "row"; r: AttRow } | { kind: "total"; dept: string; t: { techs: number; present: number; absent: number; leave: number; mission: number; notRecorded: number } };
+    type Item = { kind: "head"; dept: string } | { kind: "row"; r: AttRow }
+      | { kind: "total"; dept: string; t: { techs: number; present: number; absent: number; leave: number; mission: number; notRecorded: number } };
+    const memberOf = new Map<number, number>();
+    groupMembers.forEach(m => { if (!memberOf.has(m.tech_id)) memberOf.set(m.tech_id, m.group_id); });
+    const groupById = new Map(groups.map(g => [g.id, g]));
+
+    const buckets = new Map<string, { label: string; supId: number | null; rows: AttRow[] }>();
+    rows.forEach(r => {
+      const tech = techById.get(r.tech_id);
+      if (!tech) return;
+      const gid = memberOf.get(r.tech_id);
+      const g = gid !== undefined ? groupById.get(gid) : undefined;
+      const key = g ? `g${g.id}` : `d${tech.department || "بدون قسم"}`;
+      if (!buckets.has(key)) {
+        const label = g
+          ? `${g.name}${g.supervisorName ? ` — مشرف: ${g.supervisorName}` : ""}`
+          : `بدون مجموعة — ${tech.department || "بدون قسم"}`;
+        buckets.set(key, { label, supId: g?.supervisor_id ?? null, rows: [] });
+      }
+      buckets.get(key)!.rows.push(r);
+    });
+
     const out: Item[] = [];
-    let bucket: { r: AttRow; dept: string }[] = [];
-    const flush = (dept: string) => {
-      const t = { techs: bucket.length, present: 0, absent: 0, leave: 0, mission: 0, notRecorded: 0 };
-      bucket.forEach(x => {
-        if (x.r.status === "حاضر") t.present++;
-        else if (x.r.status === "غياب") t.absent++;
-        else if (x.r.status === "أجازة") t.leave++;
-        else if (x.r.status === "مأمورية") t.mission++;
+    buckets.forEach(b => {
+      const sorted = [...b.rows].sort((x, y) =>
+        (x.tech_id === b.supId ? -1 : 0) - (y.tech_id === b.supId ? -1 : 0));
+      const t = { techs: b.rows.length, present: 0, absent: 0, leave: 0, mission: 0, notRecorded: 0 };
+      b.rows.forEach(r => {
+        if (r.status === "حاضر") t.present++;
+        else if (r.status === "غياب") t.absent++;
+        else if (r.status === "أجازة") t.leave++;
+        else if (r.status === "مأمورية") t.mission++;
         else t.notRecorded++;
       });
-      out.push({ kind: "total", dept, t });
-    };
-    withDept.forEach((x, i) => {
-      if (i === 0 || withDept[i - 1].dept !== x.dept) {
-        if (i > 0) flush(withDept[i - 1].dept);
-        bucket = [];
-        out.push({ kind: "head", dept: x.dept });
-      }
-      bucket.push(x);
-      out.push({ kind: "row", r: x.r });
+      out.push({ kind: "head", dept: b.label });
+      sorted.forEach(r => out.push({ kind: "row", r }));
+      out.push({ kind: "total", dept: b.label, t });
     });
-    if (withDept.length) flush(withDept[withDept.length - 1].dept);
     return out;
-  }, [rows, techById]);
+  }, [rows, techById, groups, groupMembers]);
 
   // شجرة الجدول: قسم ← مجموعات (مشرف + أعضاء) ← مجموع كل مجموعة ← مجموع القسم
   const flatRows = useMemo<FlatItem[]>(() => {
