@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 import { Technician } from "@/types";
 import { today, cn } from "@/lib/utils";
 import Badge from "@/components/ui/Badge";
@@ -16,7 +17,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
   Save, RefreshCw, ChevronDown, Printer, CalendarCheck, ClipboardCheck, BarChart3,
-  Users, UserX, CalendarX2, Palmtree, Briefcase, Download,
+  Users, UserX, CalendarX2, Palmtree, Briefcase, Download, Check, Plus,
 } from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 import Modal from "@/components/ui/Modal";
@@ -30,11 +31,20 @@ type AttRow = { tech_id: number; status: string; permission: string; overtime: b
 type YearAttRow = { tech_id: number; date: string; status: string };
 // تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
 type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
+type GroupRow = { id: number; name: string; department_code: string | null; supervisorName: string | null };
+type Totals = { techs: number; present: number; absent: number; leave: number; mission: number };
+type FlatItem =
+  | { kind: "section"; key: string; label: string }
+  | { kind: "group"; key: string; label: string; sub: string }
+  | { kind: "tech"; key: string; row: PerTechRow }
+  | { kind: "total"; key: string; label: string; t: Totals; strong: boolean };
+type PerTechRow = { tech: any; present: number; absent: number; leave: number; mission: number; records: YearAttRow[] };
 type AssignableItem = { id: number; wo_id: number; item_no: number; description: string | null; wo_number: string };
 type Tab = "daily" | "stats";
 
 export default function AttendanceClient({
   initialTechnicians, role, department, isManager, departments, initialYearAttendance, assignableItems,
+  groups, groupMembers, departmentList,
 }: {
   initialTechnicians: Technician[];
   role: string;
@@ -43,6 +53,9 @@ export default function AttendanceClient({
   departments: string[];
   initialYearAttendance: YearAttRow[];
   assignableItems: AssignableItem[];
+  groups: GroupRow[];
+  groupMembers: { group_id: number; tech_id: number }[];
+  departmentList: { code: string; name_ar: string }[];
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -55,6 +68,8 @@ export default function AttendanceClient({
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [assignSnapshot, setAssignSnapshot] = useState("[]");
   const [assignTech, setAssignTech] = useState<number | null>(null);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -320,6 +335,90 @@ export default function AttendanceClient({
     (a.tech.department || "").localeCompare(b.tech.department || "", "ar") || b.absent - a.absent
   ), [visibleTechnicians, monthRecords]);
 
+  // جدول اليوم متقسم حسب القسم: عنوان لكل قسم، ومجموع الحضور/الغياب/الإجازة/المأمورية في آخره
+  const dailyItems = useMemo(() => {
+    const withDept = rows
+      .map(r => ({ r, dept: techById.get(r.tech_id)?.department || "بدون قسم" }))
+      .filter(x => techById.get(x.r.tech_id));
+    withDept.sort((a, b) => a.dept.localeCompare(b.dept, "ar"));
+    type Item = { kind: "head"; dept: string } | { kind: "row"; r: AttRow } | { kind: "total"; dept: string; t: { techs: number; present: number; absent: number; leave: number; mission: number; notRecorded: number } };
+    const out: Item[] = [];
+    let bucket: { r: AttRow; dept: string }[] = [];
+    const flush = (dept: string) => {
+      const t = { techs: bucket.length, present: 0, absent: 0, leave: 0, mission: 0, notRecorded: 0 };
+      bucket.forEach(x => {
+        if (x.r.status === "حاضر") t.present++;
+        else if (x.r.status === "غياب") t.absent++;
+        else if (x.r.status === "أجازة") t.leave++;
+        else if (x.r.status === "مأمورية") t.mission++;
+        else t.notRecorded++;
+      });
+      out.push({ kind: "total", dept, t });
+    };
+    withDept.forEach((x, i) => {
+      if (i === 0 || withDept[i - 1].dept !== x.dept) {
+        if (i > 0) flush(withDept[i - 1].dept);
+        bucket = [];
+        out.push({ kind: "head", dept: x.dept });
+      }
+      bucket.push(x);
+      out.push({ kind: "row", r: x.r });
+    });
+    if (withDept.length) flush(withDept[withDept.length - 1].dept);
+    return out;
+  }, [rows, techById]);
+
+  // شجرة الجدول: قسم ← مجموعات (مشرف + أعضاء) ← مجموع كل مجموعة ← مجموع القسم
+  const flatRows = useMemo<FlatItem[]>(() => {
+    const deptName = (code: string | null) => departmentList.find(d => d.code === code)?.name_ar ?? code ?? "بدون قسم";
+    const memberOf = new Map<number, number>();
+    groupMembers.forEach(m => { if (!memberOf.has(m.tech_id)) memberOf.set(m.tech_id, m.group_id); });
+    const groupById = new Map(groups.map(g => [g.id, g]));
+    const tot = (rs: PerTechRow[]): Totals => rs.reduce((a, r) => ({
+      techs: a.techs + 1, present: a.present + r.present, absent: a.absent + r.absent,
+      leave: a.leave + r.leave, mission: a.mission + r.mission,
+    }), { techs: 0, present: 0, absent: 0, leave: 0, mission: 0 });
+
+    type Sec = { key: string; label: string; groups: Map<number, { g: GroupRow; rows: PerTechRow[] }>; loose: PerTechRow[] };
+    const secs = new Map<string, Sec>();
+    const secFor = (key: string, label: string) => {
+      if (!secs.has(key)) secs.set(key, { key, label, groups: new Map(), loose: [] });
+      return secs.get(key)!;
+    };
+    perTechMonthly.forEach(row => {
+      const gid = memberOf.get(row.tech.id);
+      const g = gid !== undefined ? groupById.get(gid) : undefined;
+      if (g) {
+        const sec = secFor(`code:${g.department_code ?? ""}`, deptName(g.department_code));
+        if (!sec.groups.has(g.id)) sec.groups.set(g.id, { g, rows: [] });
+        sec.groups.get(g.id)!.rows.push(row);
+      } else {
+        const d = row.tech.department || "بدون قسم";
+        secFor(`raw:${d}`, d).loose.push(row);
+      }
+    });
+
+    const out: FlatItem[] = [];
+    Array.from(secs.values()).sort((a, b) => a.label.localeCompare(b.label, "ar")).forEach(sec => {
+      out.push({ kind: "section", key: `s-${sec.key}`, label: sec.label });
+      let all: PerTechRow[] = [];
+      Array.from(sec.groups.values()).forEach(({ g, rows }) => {
+        out.push({ kind: "group", key: `g-${g.id}`, label: g.name, sub: g.supervisorName ? `مشرف: ${g.supervisorName}` : "بدون مشرف" });
+        rows.forEach(r => out.push({ kind: "tech", key: `t-${r.tech.id}`, row: r }));
+        out.push({ kind: "total", key: `gt-${g.id}`, label: `مجموع ${g.name}`, t: tot(rows), strong: false });
+        all = all.concat(rows);
+      });
+      if (sec.loose.length) {
+        out.push({ kind: "group", key: `l-${sec.key}`, label: "بدون مجموعة", sub: "" });
+        sec.loose.forEach(r => out.push({ kind: "tech", key: `t-${r.tech.id}`, row: r }));
+        out.push({ kind: "total", key: `lt-${sec.key}`, label: "مجموع بدون مجموعة", t: tot(sec.loose), strong: false });
+        all = all.concat(sec.loose);
+      }
+      out.push({ kind: "total", key: `st-${sec.key}`, label: `مجموع ${sec.label}`, t: tot(all), strong: true });
+    });
+    return out;
+  }, [perTechMonthly, groups, groupMembers, departmentList]);
+
   // مجاميع كل قسم (بتتعرض جوه جدول الفنيين)
   const deptTotals = useMemo(() => {
     const m = new Map<string, { techs: number; present: number; absent: number; leave: number; mission: number }>();
@@ -474,7 +573,27 @@ export default function AttendanceClient({
                           <td><Skeleton className="h-[30px] w-full" /></td>
                           <td><Skeleton className="mx-auto size-4 rounded" /></td>
                         </tr>
-                      )) : rows.map(r => {
+                      )) : dailyItems.map((item, itemIdx) => {
+                        if (item.kind === "head") {
+                          return (
+                            <tr key={`dh-${item.dept}-${itemIdx}`} className="bg-card2/70">
+                              <td colSpan={5} className="text-xs font-bold text-accent">{item.dept}</td>
+                            </tr>
+                          );
+                        }
+                        if (item.kind === "total") {
+                          const t = item.t;
+                          return (
+                            <tr key={`dt-${item.dept}-${itemIdx}`} className="border-t-2 border-border bg-accent/5 font-semibold">
+                              <td className="text-text">مجموع {item.dept} ({t.techs} فني)</td>
+                              <td colSpan={4} className="text-xs text-subtext">
+                                <span className="text-success">حاضر {t.present}</span> · <span className="text-danger">غياب {t.absent}</span> · <span className="text-warning">إجازة {t.leave}</span> · <span className="text-accent">مأمورية {t.mission}</span>
+                                {t.notRecorded > 0 && <span> · لم يُسجل {t.notRecorded}</span>}
+                              </td>
+                            </tr>
+                          );
+                        }
+                        const r = item.r;
                         const tech = techById.get(r.tech_id);
                         if (!tech) return null;
                         const isAbsent = r.status === "غياب";
@@ -528,6 +647,9 @@ export default function AttendanceClient({
               description="اضغط على أي فني علشان تشوف أيامه في الشهر."
               actions={
                 <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setGroupsOpen(true)} className="eg-btn-ghost eg-btn-sm">
+                    <Users className="size-3.5" />المجاميع
+                  </button>
                   <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
                     aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
                 </div>
@@ -560,20 +682,41 @@ export default function AttendanceClient({
                       </tr>
                     </thead>
                     <tbody>
-                      {perTechMonthly.map((row, idx) => {
+                      {flatRows.map(item => {
+                        if (item.kind === "section") {
+                          return (
+                            <tr key={item.key} className="bg-accent/10">
+                              <td colSpan={6} className="text-xs font-bold text-accent">{item.label}</td>
+                            </tr>
+                          );
+                        }
+                        if (item.kind === "group") {
+                          return (
+                            <tr key={item.key} className="bg-card2/60">
+                              <td colSpan={6} className="text-xs">
+                                <span className="font-semibold text-text">{item.label}</span>
+                                {item.sub && <span className="text-subtext"> · {item.sub}</span>}
+                              </td>
+                            </tr>
+                          );
+                        }
+                        if (item.kind === "total") {
+                          return (
+                            <tr key={item.key} className={item.strong ? "border-t-2 border-border bg-accent/5 font-bold" : "bg-accent/[0.03] font-semibold"}>
+                              <td className="text-text">{item.label} ({item.t.techs} فني)</td>
+                              <td className="text-center tabular-nums text-success">{item.t.present}</td>
+                              <td className="text-center tabular-nums text-danger">{item.t.absent}</td>
+                              <td className="text-center tabular-nums text-warning">{item.t.leave}</td>
+                              <td className="text-center tabular-nums text-accent">{item.t.mission}</td>
+                              <td />
+                            </tr>
+                          );
+                        }
+                        const row = item.row;
                         const { tech, present, absent, leave, mission, records } = row;
                         const open = expandedTech === tech.id;
-                        const dept = tech.department || "بدون قسم";
-                        const prevDept = perTechMonthly[idx - 1]?.tech.department || "بدون قسم";
-                        const nextDept = perTechMonthly[idx + 1]?.tech.department || "بدون قسم";
-                        const totals = deptTotals.get(dept);
                         return (
-                          <Fragment key={tech.id}>
-                            {idx === 0 || prevDept !== dept ? (
-                              <tr className="bg-card2/70">
-                                <td colSpan={6} className="text-xs font-bold text-accent">{dept}</td>
-                              </tr>
-                            ) : null}
+                          <Fragment key={item.key}>
                             <tr onClick={() => setExpandedTech(open ? null : tech.id)}
                               className={cn("cursor-pointer", open && "bg-accent/[0.06] [&>td]:border-b-0")}>
                               <td className="font-medium text-text">{tech.name}</td>
@@ -608,16 +751,6 @@ export default function AttendanceClient({
                                 </td>
                               </tr>
                             )}
-                            {idx === perTechMonthly.length - 1 || nextDept !== dept ? (
-                              <tr className="border-t-2 border-border bg-accent/5 font-semibold">
-                                <td className="text-text">مجموع {dept} ({totals?.techs ?? 0} فني)</td>
-                                <td className="text-center tabular-nums text-success">{totals?.present ?? 0}</td>
-                                <td className="text-center tabular-nums text-danger">{totals?.absent ?? 0}</td>
-                                <td className="text-center tabular-nums text-warning">{totals?.leave ?? 0}</td>
-                                <td className="text-center tabular-nums text-accent">{totals?.mission ?? 0}</td>
-                                <td />
-                              </tr>
-                            ) : null}
                           </Fragment>
                         );
                       })}
@@ -681,6 +814,101 @@ export default function AttendanceClient({
           <p className="text-[11px] text-subtext">التعيينات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
         </div>
       </Modal>
+
+      {/* ── إدارة المجاميع (لكل قسم: مشرف + أعضاء) ── */}
+      <GroupsManager open={groupsOpen} onClose={() => setGroupsOpen(false)} groups={groups} groupMembers={groupMembers}
+        technicians={initialTechnicians} departmentList={departmentList} defaultDept={isManager ? "" : (departmentCodeOf(department, departmentList) ?? "")}
+        onChanged={() => router.refresh()} toast={toast} />
     </Page>
+  );
+}
+
+// كود القسم من اسم القسم اللي عند المستخدم (بيطابق الـ aliases)
+function departmentCodeOf(dept: string | null, list: { code: string; name_ar: string }[]) {
+  if (!dept) return null;
+  const v = dept.trim().toLowerCase();
+  return list.find(d => d.code.toLowerCase() === v || d.name_ar.trim().toLowerCase() === v)?.code ?? null;
+}
+
+// مدير المجاميع: إنشاء مجموعة (اسم + قسم + مشرف) وإضافة/إزالة أعضاء
+function GroupsManager({
+  open, onClose, groups, groupMembers, technicians, departmentList, defaultDept, onChanged, toast,
+}: {
+  open: boolean; onClose: () => void; groups: GroupRow[]; groupMembers: { group_id: number; tech_id: number }[];
+  technicians: { id: number; name: string; grade: string | null; department: string | null }[];
+  departmentList: { code: string; name_ar: string }[]; defaultDept: string; onChanged: () => void; toast: any;
+}) {
+  const [name, setName] = useState("");
+  const [dept, setDept] = useState(defaultDept);
+  const [sup, setSup] = useState("");
+  const [busy, setBusy] = useState(false);
+  const supervisors = technicians.filter(t => t.grade === "مشرف");
+  const create = async () => {
+    if (!name.trim() || !dept) return;
+    setBusy(true);
+    const { error } = await supabase.from("assembly_groups").insert({
+      name: name.trim(), department_code: dept, supervisor_id: sup ? Number(sup) : null,
+    });
+    setBusy(false);
+    if (error) { toast.error(error.message); return; }
+    setName(""); setSup("");
+    toast.success("اتضافت المجموعة");
+    onChanged();
+  };
+  const toggleMember = async (gid: number, tid: number, on: boolean) => {
+    const { error } = on
+      ? await supabase.from("assembly_group_members").delete().eq("group_id", gid).eq("tech_id", tid)
+      : await supabase.from("assembly_group_members").insert({ group_id: gid, tech_id: tid });
+    if (error) { toast.error(error.message); return; }
+    onChanged();
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="المجاميع" description="كل مجموعة تابعة لقسم، ليها مشرف وأعضاء" size="md">
+      <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+        <div className="rounded-lg border border-border/60 p-3 space-y-2">
+          <p className="text-[11px] text-subtext">مجموعة جديدة</p>
+          <div className="grid grid-cols-12 gap-2">
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم المجموعة" className="eg-input col-span-4" />
+            <select value={dept} onChange={e => setDept(e.target.value)} className="eg-select col-span-3">
+              <option value="">— القسم —</option>
+              {departmentList.map(d => <option key={d.code} value={d.code}>{d.name_ar}</option>)}
+            </select>
+            <select value={sup} onChange={e => setSup(e.target.value)} className="eg-select col-span-3">
+              <option value="">— المشرف —</option>
+              {supervisors.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <button type="button" onClick={create} disabled={busy || !name.trim() || !dept} className="eg-btn-primary col-span-2 justify-center">
+              <Plus className="size-3.5" />إضافة
+            </button>
+          </div>
+        </div>
+        {groups.map(g => {
+          const memIds = new Set(groupMembers.filter(m => m.group_id === g.id).map(m => m.tech_id));
+          return (
+            <div key={g.id} className="rounded-lg border border-border/60 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-text">{g.name}</span>
+                <span className="text-[11px] text-subtext">
+                  {departmentList.find(d => d.code === g.department_code)?.name_ar ?? "—"} · {g.supervisorName ? `مشرف: ${g.supervisorName}` : "بدون مشرف"}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {technicians.map(t => {
+                  const on = memIds.has(t.id);
+                  return (
+                    <button key={t.id} type="button" onClick={() => toggleMember(g.id, t.id, on)}
+                      className={cn("inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]",
+                        on ? "border-accent/50 bg-accent/15 text-accent" : "border-border bg-card2 text-subtext hover:text-text")}>
+                      {on ? <Check className="size-3" /> : <Plus className="size-3" />}{t.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {groups.length === 0 && <p className="text-xs text-subtext text-center py-3">مفيش مجاميع بعد</p>}
+      </div>
+    </Modal>
   );
 }
