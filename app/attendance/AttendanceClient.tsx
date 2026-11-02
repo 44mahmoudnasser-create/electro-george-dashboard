@@ -835,7 +835,7 @@ function GroupsManager({
   open, onClose, groups, groupMembers, technicians, departmentList, defaultDept, onChanged, toast,
 }: {
   open: boolean; onClose: () => void; groups: GroupRow[]; groupMembers: { group_id: number; tech_id: number }[];
-  technicians: { id: number; name: string; grade: string | null; department: string | null }[];
+  technicians: { id: number; name: string; grade?: string | null; department?: string | null }[];
   departmentList: { code: string; name_ar: string }[]; defaultDept: string; onChanged: () => void; toast: any;
 }) {
   const [name, setName] = useState("");
