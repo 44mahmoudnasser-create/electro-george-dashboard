@@ -45,17 +45,25 @@ export default async function AttendancePage() {
     if (!data || data.length < PAGE) break;
   }
 
-  // مجموعات الأقسام (مشرف + أعضاء)
-  const [{ data: groupRows }, { data: memberRows }] = await Promise.all([
-    supabase.from("department_groups").select("id, department, name, supervisor_id").order("name"),
-    supabase.from("department_group_members").select("group_id, tech_id"),
+  // المجاميع (لكل قسم) + أعضائها + أسماء الأقسام
+  const [{ data: groupRows }, { data: memberRows }, { data: deptList }] = await Promise.all([
+    supabase.from("assembly_groups")
+      .select("id, name, department_code, supervisor_id, supervisor:technicians(name)")
+      .eq("active", true).order("name"),
+    supabase.from("assembly_group_members").select("group_id, tech_id"),
+    supabase.from("departments").select("code, name_ar").eq("active", true).order("sort_no"),
   ]);
+  const groups = (groupRows ?? []).map((g: any) => ({
+    id: g.id, name: g.name, department_code: g.department_code, supervisor_id: g.supervisor_id ?? null,
+    supervisorName: (Array.isArray(g.supervisor) ? g.supervisor[0]?.name : g.supervisor?.name) ?? null,
+  }));
 
   // البنود المعتمدة اللي ممكن تتعين عليها الفنيين
   const { data: itemRows } = await supabase
     .from("work_order_items")
     .select("id, wo_id, item_no, description, work_order:work_orders(wo_number)")
     .eq("status", "approved")
+    .not("job_status", "in", "(مكتمل,تم التسليم)")   // البنود المنتهية مابتظهرش في التعيين
     .order("wo_id", { ascending: true })
     .order("item_no", { ascending: true });
   const assignableItems = (itemRows ?? []).map((i: any) => ({
@@ -70,8 +78,9 @@ export default async function AttendancePage() {
     <AppShell role={role}>
       <AttendanceClient
         assignableItems={assignableItems}
-        groups={(groupRows ?? []) as any[]}
+        groups={groups}
         groupMembers={(memberRows ?? []) as any[]}
+        departmentList={(deptList ?? []) as any[]}
         initialTechnicians={technicians ?? []}
         role={role}
         department={department}
