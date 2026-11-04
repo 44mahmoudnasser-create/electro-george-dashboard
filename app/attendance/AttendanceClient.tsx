@@ -105,6 +105,7 @@ export default function AttendanceClient({
         .select("id, tech_id, work_order_item_id, task, item:work_order_items(wo_id)")
         .eq("date", date).in("tech_id", techIds).order("id", { ascending: true }),
     ]);
+    if (asg.error) toast.error("تعذّر تحميل التعيينات: " + asg.error.message);
     const asgNext: Assignment[] = (asg.data ?? []).map((r: any) => ({
       key: `s${r.id}`,
       id: r.id,
@@ -492,7 +493,7 @@ export default function AttendanceClient({
                         <th>الاسم</th>
                         <th className="w-44">الحضور</th>
                         <th className="w-56">الإذن</th>
-                        <th className="w-32 text-center">التعيين</th>
+                        <th className="w-64">التعيين</th>
                         <th className="w-24 text-center">عمل إضافي</th>
                       </tr>
                     </thead>
@@ -503,6 +504,7 @@ export default function AttendanceClient({
                             <Skeleton className="h-3.5 w-32" />
                             <Skeleton className="mt-2 h-2.5 w-20" />
                           </td>
+                          <td><Skeleton className="h-[30px] w-full" /></td>
                           <td><Skeleton className="h-[30px] w-full" /></td>
                           <td><Skeleton className="h-[30px] w-full" /></td>
                           <td><Skeleton className="mx-auto size-4 rounded" /></td>
@@ -553,11 +555,27 @@ export default function AttendanceClient({
                                 {PERM_OPTS.map(o => <option key={o}>{o}</option>)}
                               </select>
                             </td>
-                            <td className="text-center">
-                              <button type="button" onClick={() => setAssignTech(r.tech_id)}
-                                aria-label={`تعيين ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
-                                {assignments.filter(a => a.tech_id === r.tech_id).length || "+"} تعيين
-                              </button>
+                            <td>
+                              {(() => {
+                                const mine = assignments.filter(a => a.tech_id === r.tech_id);
+                                return (
+                                  <div className="flex flex-col items-start gap-1">
+                                    {mine.map(a => {
+                                      const it = assignableItems.find(i => i.id === a.item_id);
+                                      return (
+                                        <span key={a.key} className="eg-chip text-[11px]">
+                                          {it ? `${it.wo_number} · #${it.item_no}` : "بند غير متاح"}
+                                          {a.task && <span className="text-subtext"> — {a.task}</span>}
+                                        </span>
+                                      );
+                                    })}
+                                    <button type="button" onClick={() => setAssignTech(r.tech_id)}
+                                      aria-label={`تعيين ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
+                                      {mine.length ? "تعديل" : "+ تعيين"}
+                                    </button>
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="text-center">
                               <input type="checkbox" checked={r.overtime}
@@ -762,7 +780,7 @@ function TotalsLine({ t }: { t: Totals }) {
 }
 
 // إدارة المجموعات: لكل قسم مجموعات، كل مجموعة ليها مشرف (درجة "مشرف") وأعضاء (فني أو مساعد)
-// العضو في مجموعة واحدة بس، والقاعدة دي متأكدة كمان في الداتابيز (028_department_groups)
+// العضو في مجموعة واحدة بس، والقاعدة دي متأكدة كمان في الداتابيز (032_department_groups)
 function GroupsManager({
   open, onClose, groups, groupMembers, technicians, onChanged,
 }: {
