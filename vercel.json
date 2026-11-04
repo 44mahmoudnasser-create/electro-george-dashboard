@@ -1,3 +1,6 @@
 {
-  "regions": ["dub1"]
+  "regions": ["dub1"],
+  "crons": [
+    { "path": "/api/cron/attendance-summary", "schedule": "0 13,14 * * *" }
+  ]
 }
