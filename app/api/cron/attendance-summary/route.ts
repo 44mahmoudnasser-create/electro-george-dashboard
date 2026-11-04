@@ -33,7 +33,7 @@ export async function GET(request: Request) {
 
   const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
-  const [{ data: techs }, { data: att }, { data: groups }, { data: members }, { data: managers }] = await Promise.all([
+  const [tRes, aRes, gRes, mRes, uRes] = await Promise.all([
     admin.from("technicians").select("id, name, department"),
     admin.from("attendance").select("tech_id, status").eq("date", date),
     admin.from("department_groups").select("id, name, department, supervisor_id"),
@@ -41,8 +41,21 @@ export async function GET(request: Request) {
     admin.from("app_users").select("email, notify_email").eq("role", "manager"),
   ]);
 
+  // لو أي استعلام فشل، ما نبعتش إيميل بأرقام غلط: نرجع الخطأ بالتفصيل
+  const failed = [
+    ["technicians", tRes.error], ["attendance", aRes.error], ["department_groups", gRes.error],
+    ["department_group_members", mRes.error], ["app_users", uRes.error],
+  ].filter(([, e]) => e) as [string, { message: string }][];
+  if (failed.length) {
+    return NextResponse.json({ error: "query failed", failed: failed.map(([t, e]) => `${t}: ${e.message}`) }, { status: 500 });
+  }
+  const techs = tRes.data, att = aRes.data, groups = gRes.data, members = mRes.data, managers = uRes.data;
+
   const statusOf = new Map((att ?? []).map(a => [a.tech_id, a.status]));
-  const groupOf = new Map((members ?? []).map(m => [m.tech_id, m.group_id]));
+  // نفس ترتيب صفحة الحضور: المشرف الأول، والأعضاء بعدهم (والعضوية بتكسب لو اتكررت)
+  const groupOf = new Map<number, number>();
+  (groups ?? []).forEach(g => { if (g.supervisor_id && !groupOf.has(g.supervisor_id)) groupOf.set(g.supervisor_id, g.id); });
+  (members ?? []).forEach(m => groupOf.set(m.tech_id, m.group_id));
   const groupById = new Map((groups ?? []).map(g => [g.id, g]));
   const nameOf = new Map((techs ?? []).map(t => [t.id, t.name]));
 
@@ -52,7 +65,8 @@ export async function GET(request: Request) {
   const sections = new Map<string, { dept: string; title: string; c: Counts }>();
   (techs ?? []).forEach(t => {
     const dept = t.department || "بدون قسم";
-    const g = groupOf.get(t.id) ? groupById.get(groupOf.get(t.id)!) : undefined;
+    const gid = groupOf.get(t.id);
+    const g = gid !== undefined ? groupById.get(gid) : undefined;
     const key = `${dept}|${g ? g.id : "none"}`;
     if (!sections.has(key)) sections.set(key, { dept, title: g ? g.name : "بدون مجموعة", c: empty() });
     const c = sections.get(key)!.c;
@@ -83,7 +97,23 @@ export async function GET(request: Request) {
         <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${s.c.mission}</td>
         <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${s.c.unrecorded}</td>
         <td style="padding:6px 10px;border:1px solid #e5e7eb">${s.c.absentNames.map(esc).join("، ") || "—"}</td>
-      </tr>`).join("");
+      </tr>`).join("") + `
+      <tr style="background:#f3f4f6;font-weight:bold">
+        <td style="padding:6px 10px;border:1px solid #e5e7eb">الإجمالي</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.total}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.present}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.absent}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.leave}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.mission}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:center">${totals.unrecorded}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb"></td>
+      </tr>`;
+
+  // تأكيد: كل عضو في مجموعة لازم المجموعة تكون موجودة في القائمة (وإلا هيتحسب "بدون مجموعة" غلط)
+  const orphanMembers = (members ?? []).filter(m => !groupById.has(m.group_id)).length;
+  if (orphanMembers > 0) {
+    return NextResponse.json({ error: "members point to groups that were not loaded", orphanMembers }, { status: 500 });
+  }
 
   const to = unique((managers ?? []).map(m => m.notify_email || m.email).filter(Boolean) as string[]);
   if (to.length === 0) return NextResponse.json({ sent: 0, reason: "no managers with email" });
