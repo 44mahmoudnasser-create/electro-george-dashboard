@@ -29,7 +29,11 @@ export async function POST(request: Request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  const { title, body, url } = await request.json();
+  const { title, body, url, details, email: sendEmail = true } = await request.json();
+  // التفاصيل (لو موجودة) بتتكتب سطر سطر، ومن غيرها بنرجع للنص العام
+  const bodyText: string = Array.isArray(details) && details.length
+    ? details.map((d: { label: string; value: string }) => `${d.label}: ${d.value}`).join("\n")
+    : (body ?? "");
 
   // مين اللي سجّل؟ (نجيب قسمه واسمه)
   const { data: sender } = await supabaseAdmin
@@ -74,7 +78,7 @@ export async function POST(request: Request) {
     (subs ?? []).map(s =>
       webpush.sendNotification(
         { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        JSON.stringify({ title, body, url })
+        JSON.stringify({ title, body: bodyText, url })
       )
     )
   );
@@ -103,7 +107,7 @@ export async function POST(request: Request) {
 
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
     console.error("GMAIL_USER / GMAIL_APP_PASSWORD مش موجودين في Vercel");
-  } else if (toEmails.length || ccEmails.length) {
+  } else if (sendEmail && (toEmails.length || ccEmails.length)) {
     try {
       const transporter = nodemailer.createTransport({
         service: "gmail",
@@ -121,11 +125,11 @@ export async function POST(request: Request) {
         to,
         ...(cc.length ? { cc } : {}),
         subject: title,
-        text: `${body}\n${who ? `بواسطة: ${who}\n` : ""}${link}`,
+        text: `${bodyText}\n${who ? `بواسطة: ${who}\n` : ""}${link}`,
         html: `
           <div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.8">
             <h2 style="margin:0 0 8px">${esc(title)}</h2>
-            <p style="margin:0 0 4px">${esc(body)}</p>
+            <p style="margin:0 0 4px;white-space:pre-line">${esc(bodyText)}</p>
             ${who ? `<p style="margin:0 0 12px;color:#666">بواسطة: ${esc(who)}</p>` : ""}
             <a href="${link}" style="background:#10b981;color:#fff;padding:8px 16px;border-radius:8px;text-decoration:none">فتح النظام</a>
           </div>`,
