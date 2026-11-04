@@ -23,6 +23,7 @@ import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 import Modal from "@/components/ui/Modal";
 import Field from "@/components/ui/Field";
 import { deptLabel } from "@/lib/roles";
+import { buildWeeklyCard } from "@/lib/weekly-card";
 
 const NOT_RECORDED = "—";
 const ATT_OPTS = [NOT_RECORDED, "حاضر", "غياب", "أجازة", "مأمورية"];
@@ -30,7 +31,7 @@ const PERM_OPTS = ["—", "إذن ساعتين صباحي", "إذن ساعتين
 
 type AttRow = { tech_id: number; status: string; permission: string; overtime: boolean };
 type YearAttRow = { tech_id: number; date: string; status: string };
-// تحميل فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
+// تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
 type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
 // مجموعة في قسم: مشرف + أعضاء (فنيين أو مساعدين)
 type GroupRow = { id: number; department: string; name: string; supervisor_id: number | null };
@@ -75,13 +76,51 @@ export default function AttendanceClient({
   const [yearAttendance, setYearAttendance] = useState<YearAttRow[]>(initialYearAttendance);
   const [statsMonth, setStatsMonth] = useState(today().slice(0, 7));
   const [expandedTech, setExpandedTech] = useState<number | null>(null);
+  // كارت ساعات العمل الأسبوعية
+  const [cardOpen, setCardOpen] = useState(false);
+  const [cardFrom, setCardFrom] = useState(today());
+  const [cardTo, setCardTo] = useState(today());
+  const [cardBusy, setCardBusy] = useState(false);
+
+  const exportWeeklyCard = async () => {
+    if (!cardFrom || !cardTo || cardFrom > cardTo) { toast.error("اختار فترة صحيحة"); return; }
+    setCardBusy(true);
+    try {
+      const [att, perm, ot, asg] = await Promise.all([
+        supabase.from("attendance").select("tech_id, date, status").gte("date", cardFrom).lte("date", cardTo),
+        supabase.from("permissions").select("tech_id, date, permission_type").gte("date", cardFrom).lte("date", cardTo),
+        supabase.from("overtime").select("tech_id, date").eq("has_overtime", true).gte("date", cardFrom).lte("date", cardTo),
+        supabase.from("technician_assignments")
+          .select("tech_id, date, work_order_item_id, item:work_order_items(item_no, work_order:work_orders(wo_number))")
+          .gte("date", cardFrom).lte("date", cardTo),
+      ]);
+      const err = [att.error, perm.error, ot.error, asg.error].find(Boolean);
+      if (err) throw new Error(err.message);
+      const blob = await buildWeeklyCard({
+        from: cardFrom, to: cardTo,
+        groups: groups as any[],
+        groupMembers,
+        technicians: initialTechnicians as any[],
+        attendance: (att.data ?? []) as any[],
+        permissions: (perm.data ?? []) as any[],
+        overtime: (ot.data ?? []) as any[],
+        assignments: (asg.data ?? []) as any[],
+      });
+      downloadBlob(blob, `كارت_ساعات_${cardFrom}_${cardTo}.docx`);
+      setCardOpen(false);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setCardBusy(false);
+    }
+  };
 
   const visibleTechnicians = useMemo(() => {
     if (!isManager || selectedDept === "الكل") return initialTechnicians;
     return initialTechnicians.filter(t => t.department === selectedDept);
   }, [initialTechnicians, selectedDept, isManager]);
 
-  const techById = useMemo(() => new Map(visibleTechnicians.map(t => [t.id, t])), [visibleTechnicians]);
+  const techById = useMemo(() => new Map(visibleTechnicians.map(t => [t.id, t] as const)), [visibleTechnicians]);
   const visibleTechIds = useMemo(() => new Set(visibleTechnicians.map(t => t.id)), [visibleTechnicians]);
 
   const dirty = useMemo(
@@ -105,7 +144,7 @@ export default function AttendanceClient({
         .select("id, tech_id, work_order_item_id, task, item:work_order_items(wo_id)")
         .eq("date", date).in("tech_id", techIds).order("id", { ascending: true }),
     ]);
-    if (asg.error) toast.error("تعذّر تحميل التحميلات: " + asg.error.message);
+    if (asg.error) toast.error("تعذّر تحميل التعيينات: " + asg.error.message);
     const asgNext: Assignment[] = (asg.data ?? []).map((r: any) => ({
       key: `s${r.id}`,
       id: r.id,
@@ -116,9 +155,9 @@ export default function AttendanceClient({
     }));
     setAssignments(asgNext);
     setAssignSnapshot(JSON.stringify(asgNext));
-    const attMap = Object.fromEntries((att.data ?? []).map(r => [r.tech_id, r.status]));
-    const permMap = Object.fromEntries((perm.data ?? []).map(r => [r.tech_id, r.permission_type]));
-    const otMap = Object.fromEntries((ot.data ?? []).map(r => [r.tech_id, r.has_overtime]));
+    const attMap = Object.fromEntries((att.data ?? []).map(r => [r.tech_id, r.status] as const));
+    const permMap = Object.fromEntries((perm.data ?? []).map(r => [r.tech_id, r.permission_type] as const));
+    const otMap = Object.fromEntries((ot.data ?? []).map(r => [r.tech_id, r.has_overtime] as const));
     const next = visibleTechnicians.map(t => ({
       tech_id: t.id,
       status: attMap[t.id] ?? NOT_RECORDED,
@@ -158,7 +197,7 @@ export default function AttendanceClient({
   const save = async () => {
     if (saving) return;
     const saved = new Map<number, AttRow>(
-      (JSON.parse(savedSnapshot || "[]") as AttRow[]).map(r => [r.tech_id, r])
+      (JSON.parse(savedSnapshot || "[]") as AttRow[]).map(r => [r.tech_id, r] as const)
     );
     const changed = rows.filter(r => {
       const s = saved.get(r.tech_id);
@@ -187,9 +226,9 @@ export default function AttendanceClient({
       if (parts.length) notifyLines.push({ label: techName(r.tech_id), value: parts.join(" · ") });
     });
     assignments.filter(a => !a.id && a.item_id).forEach(a =>
-      notifyLines.push({ label: techName(a.tech_id), value: `تحميل جديد: ${asgLabel(a)}${a.task ? ` — ${a.task}` : ""}` }));
+      notifyLines.push({ label: techName(a.tech_id), value: `تعيين جديد: ${asgLabel(a)}${a.task ? ` — ${a.task}` : ""}` }));
     savedAssign.filter(a => a.id && !assignments.some(x => x.id === a.id && x.item_id)).forEach(a =>
-      notifyLines.push({ label: techName(a.tech_id), value: `إلغاء تحميل: ${asgLabel(a)}` }));
+      notifyLines.push({ label: techName(a.tech_id), value: `إلغاء تعيين: ${asgLabel(a)}` }));
     const shownLines = notifyLines.slice(0, 8);
     const hiddenCount = notifyLines.length - shownLines.length;
     const notifyDetails = [
@@ -230,7 +269,7 @@ export default function AttendanceClient({
         ops.push(supabase.from("permissions").delete().in("tech_id", permDeleteIds).eq("date", date));
       }
 
-      // التحميلات: اللي اتشالت، واللي اتضافت، واللي اتغير بندها أو نصها
+      // التعيينات: اللي اتشالت، واللي اتضافت، واللي اتغير بندها أو نصها
       const keepIds = new Set(assignments.filter(a => a.id && a.item_id).map(a => a.id!));
       const asgDeleteIds = savedAssign.filter(a => a.id && !keepIds.has(a.id)).map(a => a.id!);
       const asgInserts = assignments
@@ -259,7 +298,7 @@ export default function AttendanceClient({
     }
     setSaving(false);
     setSavedSnapshot(JSON.stringify(rows));
-    await load();   // نجيب التحميلات بالـ IDs الجديدة
+    await load();   // نجيب التعيينات بالـ IDs الجديدة
 
     if (date.slice(0, 4) === today().slice(0, 4)) {
       setYearAttendance(prev => {
@@ -365,8 +404,8 @@ export default function AttendanceClient({
 
   // تقسيم الفنيين الظاهرين: قسم ← مجموعاته (المشرف أول واحد ثم الأعضاء) ← بدون مجموعة
   const layout = useMemo(() => {
-    const nameOf = new Map(initialTechnicians.map(t => [t.id, t.name]));
-    const groupById = new Map(groups.map(g => [g.id, g]));
+    const nameOf = new Map(initialTechnicians.map(t => [t.id, t.name] as const));
+    const groupById = new Map(groups.map(g => [g.id, g] as const));
     const groupOf = new Map<number, GroupRow>();
     groups.forEach(g => { if (g.supervisor_id && !groupOf.has(g.supervisor_id)) groupOf.set(g.supervisor_id, g); });
     groupMembers.forEach(m => { const g = groupById.get(m.group_id); if (g) groupOf.set(m.tech_id, g); });
@@ -405,7 +444,7 @@ export default function AttendanceClient({
   const dailyItems = useMemo(() => {
     type Item = { kind: "head"; dept: string } | { kind: "row"; r: AttRow }
       | { kind: "total"; dept: string; t: { techs: number; present: number; absent: number; leave: number; mission: number; notRecorded: number } };
-    const rowById = new Map(rows.map(r => [r.tech_id, r]));
+    const rowById = new Map(rows.map(r => [r.tech_id, r] as const));
     const out: Item[] = [];
     layout.forEach(d => d.sections.forEach(sec => {
       const secRows = sec.ids.map(id => rowById.get(id)).filter((r): r is AttRow => !!r);
@@ -425,7 +464,7 @@ export default function AttendanceClient({
     return out;
   }, [rows, layout]);
 
-  const perTechById = useMemo(() => new Map(perTechMonthly.map(r => [r.tech.id, r])), [perTechMonthly]);
+  const perTechById = useMemo(() => new Map(perTechMonthly.map(r => [r.tech.id, r] as const)), [perTechMonthly]);
   const totalsOf = (ids: number[]): Totals => ids.reduce((a, id) => {
     const r = perTechById.get(id);
     return r
@@ -521,7 +560,7 @@ export default function AttendanceClient({
                         <th>الاسم</th>
                         <th className="w-44">الحضور</th>
                         <th className="w-56">الإذن</th>
-                        <th className="w-64">التحميل</th>
+                        <th className="w-64">التعيين</th>
                         <th className="w-24 text-center">عمل إضافي</th>
                       </tr>
                     </thead>
@@ -598,8 +637,8 @@ export default function AttendanceClient({
                                       );
                                     })}
                                     <button type="button" onClick={() => setAssignTech(r.tech_id)}
-                                      aria-label={`تحميل ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
-                                      {mine.length ? "تعديل" : "+ تحميل"}
+                                      aria-label={`تعيين ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
+                                      {mine.length ? "تعديل" : "+ تعيين"}
                                     </button>
                                   </div>
                                 );
@@ -632,6 +671,9 @@ export default function AttendanceClient({
                       <Settings2 className="size-3.5" />إدارة المجموعات
                     </button>
                   )}
+                  <button type="button" onClick={() => setCardOpen(true)} className="eg-btn-ghost eg-btn-sm">
+                    <Printer className="size-3.5" />كارت الساعات
+                  </button>
                   <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
                     aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
                 </div>
@@ -735,15 +777,15 @@ export default function AttendanceClient({
         )}
       </PageBody>
 
-      {/* ── تحميل الفني على بنود الأوامر ── */}
+      {/* ── تعيين الفني على بنود الأوامر ── */}
       <Modal open={assignTech !== null} onClose={() => setAssignTech(null)}
-        title={`تحميل ${techById.get(assignTech ?? -1)?.name ?? ""}`} description={`يوم ${date}`} size="md">
+        title={`تعيين ${techById.get(assignTech ?? -1)?.name ?? ""}`} description={`يوم ${date}`} size="md">
         <div className="space-y-3">
           {assignments.filter(a => a.tech_id === assignTech).length === 0 && (
-            <p className="text-xs text-subtext">مفيش تحميلات للفني ده في اليوم ده</p>
+            <p className="text-xs text-subtext">مفيش تعيينات للفني ده في اليوم ده</p>
           )}
           {assignments.filter(a => a.tech_id === assignTech).map(a => {
-            const woList = Array.from(new Map(assignableItems.map(i => [i.wo_id, i.wo_number])).entries());
+            const woList = Array.from(new Map(assignableItems.map(i => [i.wo_id, i.wo_number] as const)).entries());
             const itemsOfWo = assignableItems.filter(i => i.wo_id === a.wo_id);
             const update = (patch: Partial<Assignment>) =>
               setAssignments(prev => prev.map(x => x.key === a.key ? { ...x, ...patch } : x));
@@ -782,8 +824,29 @@ export default function AttendanceClient({
           })}
           <button type="button"
             onClick={() => setAssignments(prev => [...prev, { key: `n${Date.now()}`, tech_id: assignTech!, wo_id: null, item_id: null, task: "" }])}
-            className="eg-btn-ghost eg-btn-sm">+ إضافة تحميل</button>
-          <p className="text-[11px] text-subtext">التحميلات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
+            className="eg-btn-ghost eg-btn-sm">+ إضافة تعيين</button>
+          <p className="text-[11px] text-subtext">التعيينات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
+        </div>
+      </Modal>
+
+      {/* ── كارت ساعات العمل الأسبوعية ── */}
+      <Modal open={cardOpen} onClose={() => setCardOpen(false)} title="كارت ساعات العمل" description="ورقة لكل مجموعة في ملف واحد" size="sm">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="من">
+              <input type="date" value={cardFrom} onChange={e => setCardFrom(e.target.value)} className="eg-input" />
+            </Field>
+            <Field label="إلى">
+              <input type="date" value={cardTo} onChange={e => setCardTo(e.target.value)} className="eg-input" />
+            </Field>
+          </div>
+          <p className="text-[11px] text-subtext">
+            كل بند = عدد اللي اشتغلوا عليه × 8 ساعات، والإذن بيتخصم، والعمل الإضافي 3 ساعات لكل شخص.
+          </p>
+          <button type="button" onClick={exportWeeklyCard} disabled={cardBusy} className="eg-btn-primary w-full justify-center">
+            {cardBusy ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}
+            {cardBusy ? "جاري التحضير..." : "تحميل الكارت"}
+          </button>
         </div>
       </Modal>
 
@@ -834,7 +897,7 @@ function GroupsManager({
   const deptGroups = groups.filter(g => g.department === activeDept);
   const memberIds = new Set(groupMembers.map(m => m.tech_id));
   const freeMembers = deptTechs.filter(t => (t.grade === "فني" || t.grade === "مساعد") && !memberIds.has(t.id));
-  const nameOf = new Map(technicians.map(t => [t.id, t]));
+  const nameOf = new Map(technicians.map(t => [t.id, t] as const));
 
   const run = async (op: PromiseLike<{ error: { message: string } | null }>, ok?: string) => {
     setBusy(true);
