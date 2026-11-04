@@ -17,11 +17,12 @@ import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import {
   Save, RefreshCw, ChevronDown, Printer, CalendarCheck, ClipboardCheck, BarChart3,
-  Users, UserX, CalendarX2, Palmtree, Briefcase, Download, Check, Plus,
+  Users, UserX, CalendarX2, Palmtree, Briefcase, Plus, Trash2, X, Settings2,
 } from "lucide-react";
 import { buildOvertimeForm, downloadBlob } from "@/lib/overtime-form";
 import Modal from "@/components/ui/Modal";
 import Field from "@/components/ui/Field";
+import { deptLabel } from "@/lib/roles";
 
 const NOT_RECORDED = "—";
 const ATT_OPTS = [NOT_RECORDED, "حاضر", "غياب", "أجازة", "مأمورية"];
@@ -31,20 +32,18 @@ type AttRow = { tech_id: number; status: string; permission: string; overtime: b
 type YearAttRow = { tech_id: number; date: string; status: string };
 // تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
 type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
-type GroupRow = { id: number; name: string; department_code: string | null; supervisor_id: number | null; supervisorName: string | null };
+// مجموعة في قسم: مشرف + أعضاء (فنيين أو مساعدين)
+type GroupRow = { id: number; department: string; name: string; supervisor_id: number | null };
 type Totals = { techs: number; present: number; absent: number; leave: number; mission: number };
-type FlatItem =
-  | { kind: "section"; key: string; label: string }
-  | { kind: "group"; key: string; label: string; sub: string }
-  | { kind: "tech"; key: string; row: PerTechRow }
-  | { kind: "total"; key: string; label: string; t: Totals; strong: boolean };
+// قطعة من القسم: مجموعة، أو "بدون مجموعة" (ids: المشرف أول واحد)
+type Section = { key: string; title: string; sub: string; ids: number[] };
 type PerTechRow = { tech: any; present: number; absent: number; leave: number; mission: number; records: YearAttRow[] };
 type AssignableItem = { id: number; wo_id: number; item_no: number; description: string | null; wo_number: string };
 type Tab = "daily" | "stats";
 
 export default function AttendanceClient({
   initialTechnicians, role, department, isManager, departments, initialYearAttendance, assignableItems,
-  groups, groupMembers, departmentList,
+  groups, groupMembers,
 }: {
   initialTechnicians: Technician[];
   role: string;
@@ -55,7 +54,6 @@ export default function AttendanceClient({
   assignableItems: AssignableItem[];
   groups: GroupRow[];
   groupMembers: { group_id: number; tech_id: number }[];
-  departmentList: { code: string; name_ar: string }[];
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -69,6 +67,7 @@ export default function AttendanceClient({
   const [assignSnapshot, setAssignSnapshot] = useState("[]");
   const [assignTech, setAssignTech] = useState<number | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(false);
+  const canManageGroups = isManager || role === "admin";
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -335,151 +334,75 @@ export default function AttendanceClient({
     (a.tech.department || "").localeCompare(b.tech.department || "", "ar") || b.absent - a.absent
   ), [visibleTechnicians, monthRecords]);
 
-  // جدول اليوم: كل مجموعة (مشرف + فنيينه) في قائمة لوحدها، والمشرف أول واحد فيها
-  // الفنيين اللي مش في مجموعة بيتجمعوا تحت قسمهم
+  // تقسيم الفنيين الظاهرين: قسم ← مجموعاته (المشرف أول واحد ثم الأعضاء) ← بدون مجموعة
+  const layout = useMemo(() => {
+    const nameOf = new Map(initialTechnicians.map(t => [t.id, t.name]));
+    const groupById = new Map(groups.map(g => [g.id, g]));
+    const groupOf = new Map<number, GroupRow>();
+    groups.forEach(g => { if (g.supervisor_id && !groupOf.has(g.supervisor_id)) groupOf.set(g.supervisor_id, g); });
+    groupMembers.forEach(m => { const g = groupById.get(m.group_id); if (g) groupOf.set(m.tech_id, g); });
+
+    const depts = new Map<string, { groups: Map<number, number[]>; loose: number[] }>();
+    visibleTechnicians.forEach(t => {
+      const dept = t.department || "بدون قسم";
+      if (!depts.has(dept)) depts.set(dept, { groups: new Map(), loose: [] });
+      const d = depts.get(dept)!;
+      const g = groupOf.get(t.id);
+      if (g) d.groups.set(g.id, [...(d.groups.get(g.id) ?? []), t.id]);
+      else d.loose.push(t.id);
+    });
+
+    return Array.from(depts.entries())
+      .sort(([a], [b]) => deptLabel(a).localeCompare(deptLabel(b), "ar"))
+      .map(([dept, d]) => {
+        const sections: Section[] = Array.from(d.groups.entries())
+          .map(([gid, ids]) => {
+            const g = groupById.get(gid)!;
+            const sup = g.supervisor_id;
+            return {
+              key: `g${gid}`,
+              title: g.name,
+              sub: sup ? `مشرف: ${nameOf.get(sup) ?? "—"}` : "بدون مشرف",
+              ids: [...ids].sort((x, y) => (x === sup ? -1 : 0) - (y === sup ? -1 : 0)),
+            };
+          })
+          .sort((a, b) => a.title.localeCompare(b.title, "ar"));
+        if (d.loose.length) sections.push({ key: `l-${dept}`, title: "بدون مجموعة", sub: "", ids: d.loose });
+        return { dept, label: deptLabel(dept), sections };
+      });
+  }, [visibleTechnicians, initialTechnicians, groups, groupMembers]);
+
+  // جدول اليوم بنفس التقسيم
   const dailyItems = useMemo(() => {
     type Item = { kind: "head"; dept: string } | { kind: "row"; r: AttRow }
       | { kind: "total"; dept: string; t: { techs: number; present: number; absent: number; leave: number; mission: number; notRecorded: number } };
-    const memberOf = new Map<number, number>();
-    groupMembers.forEach(m => { if (!memberOf.has(m.tech_id)) memberOf.set(m.tech_id, m.group_id); });
-    const groupById = new Map(groups.map(g => [g.id, g]));
-
-    const buckets = new Map<string, { label: string; supId: number | null; rows: AttRow[] }>();
-    rows.forEach(r => {
-      const tech = techById.get(r.tech_id);
-      if (!tech) return;
-      const gid = memberOf.get(r.tech_id);
-      const g = gid !== undefined ? groupById.get(gid) : undefined;
-      const key = g ? `g${g.id}` : `d${tech.department || "بدون قسم"}`;
-      if (!buckets.has(key)) {
-        const label = g
-          ? `${g.name}${g.supervisorName ? ` — مشرف: ${g.supervisorName}` : ""}`
-          : `بدون مجموعة — ${tech.department || "بدون قسم"}`;
-        buckets.set(key, { label, supId: g?.supervisor_id ?? null, rows: [] });
-      }
-      buckets.get(key)!.rows.push(r);
-    });
-
+    const rowById = new Map(rows.map(r => [r.tech_id, r]));
     const out: Item[] = [];
-    buckets.forEach(b => {
-      const sorted = [...b.rows].sort((x, y) =>
-        (x.tech_id === b.supId ? -1 : 0) - (y.tech_id === b.supId ? -1 : 0));
-      const t = { techs: b.rows.length, present: 0, absent: 0, leave: 0, mission: 0, notRecorded: 0 };
-      b.rows.forEach(r => {
+    layout.forEach(d => d.sections.forEach(sec => {
+      const secRows = sec.ids.map(id => rowById.get(id)).filter((r): r is AttRow => !!r);
+      if (!secRows.length) return;
+      const t = { techs: secRows.length, present: 0, absent: 0, leave: 0, mission: 0, notRecorded: 0 };
+      secRows.forEach(r => {
         if (r.status === "حاضر") t.present++;
         else if (r.status === "غياب") t.absent++;
         else if (r.status === "أجازة") t.leave++;
         else if (r.status === "مأمورية") t.mission++;
         else t.notRecorded++;
       });
-      out.push({ kind: "head", dept: b.label });
-      sorted.forEach(r => out.push({ kind: "row", r }));
-      out.push({ kind: "total", dept: b.label, t });
-    });
+      out.push({ kind: "head", dept: `${d.label} · ${sec.title}${sec.sub ? ` — ${sec.sub}` : ""}` });
+      secRows.forEach(r => out.push({ kind: "row", r }));
+      out.push({ kind: "total", dept: sec.title, t });
+    }));
     return out;
-  }, [rows, techById, groups, groupMembers]);
+  }, [rows, layout]);
 
-  // شجرة الجدول: قسم ← مجموعات (مشرف + أعضاء) ← مجموع كل مجموعة ← مجموع القسم
-  const flatRows = useMemo<FlatItem[]>(() => {
-    const deptName = (code: string | null) => departmentList.find(d => d.code === code)?.name_ar ?? code ?? "بدون قسم";
-    const memberOf = new Map<number, number>();
-    groupMembers.forEach(m => { if (!memberOf.has(m.tech_id)) memberOf.set(m.tech_id, m.group_id); });
-    const groupById = new Map(groups.map(g => [g.id, g]));
-    const tot = (rs: PerTechRow[]): Totals => rs.reduce((a, r) => ({
-      techs: a.techs + 1, present: a.present + r.present, absent: a.absent + r.absent,
-      leave: a.leave + r.leave, mission: a.mission + r.mission,
-    }), { techs: 0, present: 0, absent: 0, leave: 0, mission: 0 });
-
-    type Sec = { key: string; label: string; groups: Map<number, { g: GroupRow; rows: PerTechRow[] }>; loose: PerTechRow[] };
-    const secs = new Map<string, Sec>();
-    const secFor = (key: string, label: string) => {
-      if (!secs.has(key)) secs.set(key, { key, label, groups: new Map(), loose: [] });
-      return secs.get(key)!;
-    };
-    perTechMonthly.forEach(row => {
-      const gid = memberOf.get(row.tech.id);
-      const g = gid !== undefined ? groupById.get(gid) : undefined;
-      if (g) {
-        const sec = secFor(`code:${g.department_code ?? ""}`, deptName(g.department_code));
-        if (!sec.groups.has(g.id)) sec.groups.set(g.id, { g, rows: [] });
-        sec.groups.get(g.id)!.rows.push(row);
-      } else {
-        const d = row.tech.department || "بدون قسم";
-        secFor(`raw:${d}`, d).loose.push(row);
-      }
-    });
-
-    const out: FlatItem[] = [];
-    Array.from(secs.values()).sort((a, b) => a.label.localeCompare(b.label, "ar")).forEach(sec => {
-      out.push({ kind: "section", key: `s-${sec.key}`, label: sec.label });
-      let all: PerTechRow[] = [];
-      Array.from(sec.groups.values()).forEach(({ g, rows }) => {
-        out.push({ kind: "group", key: `g-${g.id}`, label: g.name, sub: g.supervisorName ? `مشرف: ${g.supervisorName}` : "بدون مشرف" });
-        rows.forEach(r => out.push({ kind: "tech", key: `t-${r.tech.id}`, row: r }));
-        out.push({ kind: "total", key: `gt-${g.id}`, label: `مجموع ${g.name}`, t: tot(rows), strong: false });
-        all = all.concat(rows);
-      });
-      if (sec.loose.length) {
-        out.push({ kind: "group", key: `l-${sec.key}`, label: "بدون مجموعة", sub: "" });
-        sec.loose.forEach(r => out.push({ kind: "tech", key: `t-${r.tech.id}`, row: r }));
-        out.push({ kind: "total", key: `lt-${sec.key}`, label: "مجموع بدون مجموعة", t: tot(sec.loose), strong: false });
-        all = all.concat(sec.loose);
-      }
-      out.push({ kind: "total", key: `st-${sec.key}`, label: `مجموع ${sec.label}`, t: tot(all), strong: true });
-    });
-    return out;
-  }, [perTechMonthly, groups, groupMembers, departmentList]);
-
-  // مجاميع كل قسم (بتتعرض جوه جدول الفنيين)
-  const deptTotals = useMemo(() => {
-    const m = new Map<string, { techs: number; present: number; absent: number; leave: number; mission: number }>();
-    perTechMonthly.forEach(r => {
-      const k = r.tech.department || "بدون قسم";
-      const g = m.get(k) ?? { techs: 0, present: 0, absent: 0, leave: 0, mission: 0 };
-      g.techs += 1; g.present += r.present; g.absent += r.absent; g.leave += r.leave; g.mission += r.mission;
-      m.set(k, g);
-    });
-    return m;
-  }, [perTechMonthly]);
-
-  // إحصائيات الأقسام للشهر (نفس الفنيين اللي شايفهم الصفحة)
-  const deptMonthly = useMemo(() => {
-    const groups = new Map<string, { dept: string; techs: number; present: number; absent: number; leave: number; mission: number }>();
-    visibleTechnicians.forEach(t => {
-      const key = t.department || "بدون قسم";
-      if (!groups.has(key)) groups.set(key, { dept: key, techs: 0, present: 0, absent: 0, leave: 0, mission: 0 });
-      const g = groups.get(key)!;
-      const recs = monthRecords.filter(r => r.tech_id === t.id);
-      g.techs += 1;
-      g.present += count(recs, "حاضر");
-      g.absent += count(recs, "غياب");
-      g.leave += count(recs, "أجازة");
-      g.mission += count(recs, "مأمورية");
-    });
-    return Array.from(groups.values()).sort((a, b) => a.dept.localeCompare(b.dept, "ar"));
-  }, [visibleTechnicians, monthRecords]);
-
-  // تصدير إحصائيات الأقسام لملف CSV (بيتفتح عربي في Excel)
-  const exportDeptStats = () => {
-    if (deptMonthly.length === 0) { toast.error("مفيش بيانات للتصدير"); return; }
-    const head = ["القسم", "عدد الفنيين", "أيام الحضور", "أيام الغياب", "أيام الإجازة", "أيام المأمورية"];
-    const body = deptMonthly.map(g => [g.dept, g.techs, g.present, g.absent, g.leave, g.mission]);
-    const sum = (k: "techs" | "present" | "absent" | "leave" | "mission") =>
-      deptMonthly.reduce((a, g) => a + g[k], 0);
-    const total = ["الإجمالي", sum("techs"), sum("present"), sum("absent"), sum("leave"), sum("mission")];
-    const rows: (string | number)[][] = [[`إحصائيات الأقسام — ${monthLabel}`], head, ...body, total];
-    const csv = rows
-      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\r\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `احصائيات_الاقسام_${statsMonth}.csv`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast.success("اتصدّرت إحصائيات الأقسام");
-  };
+  const perTechById = useMemo(() => new Map(perTechMonthly.map(r => [r.tech.id, r])), [perTechMonthly]);
+  const totalsOf = (ids: number[]): Totals => ids.reduce((a, id) => {
+    const r = perTechById.get(id);
+    return r
+      ? { techs: a.techs + 1, present: a.present + r.present, absent: a.absent + r.absent, leave: a.leave + r.leave, mission: a.mission + r.mission }
+      : a;
+  }, { techs: 0, present: 0, absent: 0, leave: 0, mission: 0 });
 
   const monthLabel = useMemo(() => {
     const [y, m] = statsMonth.split("-").map(Number);
@@ -658,9 +581,11 @@ export default function AttendanceClient({
               description="اضغط على أي فني علشان تشوف أيامه في الشهر."
               actions={
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setGroupsOpen(true)} className="eg-btn-ghost eg-btn-sm">
-                    <Users className="size-3.5" />المجاميع
-                  </button>
+                  {canManageGroups && (
+                    <button type="button" onClick={() => setGroupsOpen(true)} className="eg-btn-ghost eg-btn-sm">
+                      <Settings2 className="size-3.5" />إدارة المجموعات
+                    </button>
+                  )}
                   <input type="month" value={statsMonth} onChange={e => setStatsMonth(e.target.value)}
                     aria-label="شهر الإحصائيات" className="eg-input eg-input-sm w-40" />
                 </div>
@@ -675,101 +600,91 @@ export default function AttendanceClient({
               <StatCard label={`مأموريات ${monthLabel}`} value={monthTotals.mission} tone={monthTotals.mission ? "accent" : "muted"} icon={Briefcase} />
             </div>
 
-            {/* تفصيل لكل فني */}
-            <div className="eg-card overflow-hidden !p-0">
-              {perTechMonthly.length === 0 ? (
-                <EmptyState icon={Users} message="لا يوجد فنيين لعرض إحصائياتهم" />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="eg-table min-w-[520px]">
-                    <thead>
-                      <tr>
-                        <th>الاسم</th>
-                        <th className="w-20 text-center">حاضر</th>
-                        <th className="w-20 text-center">غياب</th>
-                        <th className="w-20 text-center">إجازة</th>
-                        <th className="w-20 text-center">مأمورية</th>
-                        <th className="w-12"><span className="sr-only">السجلات</span></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {flatRows.map(item => {
-                        if (item.kind === "section") {
-                          return (
-                            <tr key={item.key} className="bg-accent/10">
-                              <td colSpan={6} className="text-xs font-bold text-accent">{item.label}</td>
-                            </tr>
-                          );
-                        }
-                        if (item.kind === "group") {
-                          return (
-                            <tr key={item.key} className="bg-card2/60">
-                              <td colSpan={6} className="text-xs">
-                                <span className="font-semibold text-text">{item.label}</span>
-                                {item.sub && <span className="text-subtext"> · {item.sub}</span>}
-                              </td>
-                            </tr>
-                          );
-                        }
-                        if (item.kind === "total") {
-                          return (
-                            <tr key={item.key} className={item.strong ? "border-t-2 border-border bg-accent/5 font-bold" : "bg-accent/[0.03] font-semibold"}>
-                              <td className="text-text">{item.label} ({item.t.techs} فني)</td>
-                              <td className="text-center tabular-nums text-success">{item.t.present}</td>
-                              <td className="text-center tabular-nums text-danger">{item.t.absent}</td>
-                              <td className="text-center tabular-nums text-warning">{item.t.leave}</td>
-                              <td className="text-center tabular-nums text-accent">{item.t.mission}</td>
-                              <td />
-                            </tr>
-                          );
-                        }
-                        const row = item.row;
-                        const { tech, present, absent, leave, mission, records } = row;
-                        const open = expandedTech === tech.id;
-                        return (
-                          <Fragment key={item.key}>
-                            <tr onClick={() => setExpandedTech(open ? null : tech.id)}
-                              className={cn("cursor-pointer", open && "bg-accent/[0.06] [&>td]:border-b-0")}>
-                              <td className="font-medium text-text">{tech.name}</td>
-                              <td className={cn("text-center tabular-nums", present ? "text-success" : "text-subtext")}>{present}</td>
-                              <td className={cn("text-center tabular-nums", absent > 0 ? "font-bold text-danger" : "text-subtext")}>{absent}</td>
-                              <td className={cn("text-center tabular-nums", leave ? "text-warning" : "text-subtext")}>{leave}</td>
-                              <td className={cn("text-center tabular-nums", mission ? "text-accent" : "text-subtext")}>{mission}</td>
-                              <td className="text-end">
-                                {/* الضغطة بتوصل للصف نفسه فبيتفتح/يتقفل (والزرار علشان الكيبورد) */}
-                                <button type="button" aria-expanded={open}
-                                  aria-label={`${open ? "إخفاء" : "عرض"} سجلات ${tech.name}`} className="eg-icon-btn">
-                                  <ChevronDown className={cn("size-4 transition-transform duration-200", open && "rotate-180 text-accent")} />
-                                </button>
-                              </td>
-                            </tr>
-                            {open && (
-                              <tr>
-                                <td colSpan={6} className="animate-fade-in bg-accent/[0.03] px-4 pb-3.5 pt-1 hover:bg-accent/[0.03]">
-                                  {records.length === 0 ? (
-                                    <p className="text-xs text-subtext">لا توجد سجلات هذا الشهر</p>
-                                  ) : (
-                                    <ul className="flex flex-wrap gap-1.5">
-                                      {records.map((r, i) => (
-                                        <li key={i}
-                                          className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-card py-1 pe-1 ps-2.5 shadow-card">
-                                          <span className="text-[11px] tabular-nums text-subtext">{r.date}</span>
-                                          <Badge label={r.status} />
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+            {/* كل قسم ← مجموعاته، وكل مجموعة: المشرف ثم الأعضاء */}
+            {layout.length === 0 ? (
+              <div className="eg-card"><EmptyState icon={Users} message="لا يوجد فنيين لعرض إحصائياتهم" /></div>
+            ) : layout.map(d => (
+              <section key={d.dept} className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-text">{d.label}</h3>
+                  <TotalsLine t={totalsOf(d.sections.flatMap(sec => sec.ids))} />
                 </div>
-              )}
-            </div>
+                {d.sections.map(sec => (
+                  <div key={sec.key} className="eg-card overflow-hidden !p-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-card2/50 px-4 py-2.5">
+                      <div className="min-w-0">
+                        <span className="text-sm font-semibold text-text">{sec.title}</span>
+                        {sec.sub && <span className="text-xs text-subtext"> · {sec.sub}</span>}
+                      </div>
+                      <TotalsLine t={totalsOf(sec.ids)} />
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="eg-table min-w-[520px]">
+                        <thead>
+                          <tr>
+                            <th>الاسم</th>
+                            <th className="w-20 text-center">حاضر</th>
+                            <th className="w-20 text-center">غياب</th>
+                            <th className="w-20 text-center">إجازة</th>
+                            <th className="w-20 text-center">مأمورية</th>
+                            <th className="w-12"><span className="sr-only">السجلات</span></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sec.ids.map(id => {
+                            const row = perTechById.get(id);
+                            if (!row) return null;
+                            const { tech, present, absent, leave, mission, records } = row;
+                            const open = expandedTech === tech.id;
+                            return (
+                              <Fragment key={id}>
+                                <tr onClick={() => setExpandedTech(open ? null : tech.id)}
+                                  className={cn("cursor-pointer", open && "bg-accent/[0.06] [&>td]:border-b-0")}>
+                                  <td className="font-medium text-text">
+                                    {tech.name}
+                                    {tech.grade && <span className="ms-2 align-middle"><Badge label={tech.grade} /></span>}
+                                  </td>
+                                  <td className={cn("text-center tabular-nums", present ? "text-success" : "text-subtext")}>{present}</td>
+                                  <td className={cn("text-center tabular-nums", absent > 0 ? "font-bold text-danger" : "text-subtext")}>{absent}</td>
+                                  <td className={cn("text-center tabular-nums", leave ? "text-warning" : "text-subtext")}>{leave}</td>
+                                  <td className={cn("text-center tabular-nums", mission ? "text-accent" : "text-subtext")}>{mission}</td>
+                                  <td className="text-end">
+                                    {/* الضغطة بتوصل للصف نفسه فبيتفتح/يتقفل (والزرار علشان الكيبورد) */}
+                                    <button type="button" aria-expanded={open}
+                                      aria-label={`${open ? "إخفاء" : "عرض"} سجلات ${tech.name}`} className="eg-icon-btn">
+                                      <ChevronDown className={cn("size-4 transition-transform duration-200", open && "rotate-180 text-accent")} />
+                                    </button>
+                                  </td>
+                                </tr>
+                                {open && (
+                                  <tr>
+                                    <td colSpan={6} className="animate-fade-in bg-accent/[0.03] px-4 pb-3.5 pt-1 hover:bg-accent/[0.03]">
+                                      {records.length === 0 ? (
+                                        <p className="text-xs text-subtext">لا توجد سجلات هذا الشهر</p>
+                                      ) : (
+                                        <ul className="flex flex-wrap gap-1.5">
+                                          {records.map((r, i) => (
+                                            <li key={i}
+                                              className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-card py-1 pe-1 ps-2.5 shadow-card">
+                                              <span className="text-[11px] tabular-nums text-subtext">{r.date}</span>
+                                              <Badge label={r.status} />
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ))}
           </>
         )}
       </PageBody>
@@ -826,99 +741,156 @@ export default function AttendanceClient({
         </div>
       </Modal>
 
-      {/* ── إدارة المجاميع (لكل قسم: مشرف + أعضاء) ── */}
-      <GroupsManager open={groupsOpen} onClose={() => setGroupsOpen(false)} groups={groups} groupMembers={groupMembers}
-        technicians={initialTechnicians} departmentList={departmentList} defaultDept={isManager ? "" : (departmentCodeOf(department, departmentList) ?? "")}
-        onChanged={() => router.refresh()} toast={toast} />
+      {/* ── إدارة مجموعات الأقسام ── */}
+      {canManageGroups && (
+        <GroupsManager open={groupsOpen} onClose={() => setGroupsOpen(false)}
+          groups={groups} groupMembers={groupMembers} technicians={initialTechnicians}
+          onChanged={() => router.refresh()} />
+      )}
     </Page>
   );
 }
 
-// كود القسم من اسم القسم اللي عند المستخدم (بيطابق الـ aliases)
-function departmentCodeOf(dept: string | null, list: { code: string; name_ar: string }[]) {
-  if (!dept) return null;
-  const v = dept.trim().toLowerCase();
-  return list.find(d => d.code.toLowerCase() === v || d.name_ar.trim().toLowerCase() === v)?.code ?? null;
+// سطر المجاميع: حاضر · غياب · إجازة · مأمورية
+function TotalsLine({ t }: { t: Totals }) {
+  return (
+    <span className="text-xs tabular-nums text-subtext">
+      {t.techs} فرد · <span className="text-success">حاضر {t.present}</span> · <span className="text-danger">غياب {t.absent}</span>
+      {" "}· <span className="text-warning">إجازة {t.leave}</span> · <span className="text-accent">مأمورية {t.mission}</span>
+    </span>
+  );
 }
 
-// مدير المجاميع: إنشاء مجموعة (اسم + قسم + مشرف) وإضافة/إزالة أعضاء
+// إدارة المجموعات: لكل قسم مجموعات، كل مجموعة ليها مشرف (درجة "مشرف") وأعضاء (فني أو مساعد)
+// العضو في مجموعة واحدة بس، والقاعدة دي متأكدة كمان في الداتابيز (028_department_groups)
 function GroupsManager({
-  open, onClose, groups, groupMembers, technicians, departmentList, defaultDept, onChanged, toast,
+  open, onClose, groups, groupMembers, technicians, onChanged,
 }: {
-  open: boolean; onClose: () => void; groups: GroupRow[]; groupMembers: { group_id: number; tech_id: number }[];
-  technicians: { id: number; name: string; grade?: string | null; department?: string | null }[];
-  departmentList: { code: string; name_ar: string }[]; defaultDept: string; onChanged: () => void; toast: any;
+  open: boolean; onClose: () => void; groups: GroupRow[];
+  groupMembers: { group_id: number; tech_id: number }[];
+  technicians: Technician[]; onChanged: () => void;
 }) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const depts = useMemo(
+    () => Array.from(new Set(technicians.map(t => t.department).filter((d): d is string => !!d)))
+      .sort((a, b) => deptLabel(a).localeCompare(deptLabel(b), "ar")),
+    [technicians]
+  );
+  const [dept, setDept] = useState("");
   const [name, setName] = useState("");
-  const [dept, setDept] = useState(defaultDept);
   const [sup, setSup] = useState("");
   const [busy, setBusy] = useState(false);
-  const supervisors = technicians.filter(t => t.grade === "مشرف");
-  const create = async () => {
-    if (!name.trim() || !dept) return;
+  const activeDept = dept || depts[0] || "";
+
+  const deptTechs = technicians.filter(t => t.department === activeDept);
+  const supervisors = deptTechs.filter(t => t.grade === "مشرف");
+  const deptGroups = groups.filter(g => g.department === activeDept);
+  const memberIds = new Set(groupMembers.map(m => m.tech_id));
+  const freeMembers = deptTechs.filter(t => (t.grade === "فني" || t.grade === "مساعد") && !memberIds.has(t.id));
+  const nameOf = new Map(technicians.map(t => [t.id, t]));
+
+  const run = async (op: PromiseLike<{ error: { message: string } | null }>, ok?: string) => {
     setBusy(true);
-    const { error } = await supabase.from("assembly_groups").insert({
-      name: name.trim(), department_code: dept, supervisor_id: sup ? Number(sup) : null,
-    });
+    const { error } = await op;
     setBusy(false);
-    if (error) { toast.error(error.message); return; }
-    setName(""); setSup("");
-    toast.success("اتضافت المجموعة");
+    if (error) { toast.error(error.message); return false; }
+    if (ok) toast.success(ok);
     onChanged();
+    return true;
   };
-  const toggleMember = async (gid: number, tid: number, on: boolean) => {
-    const { error } = on
-      ? await supabase.from("assembly_group_members").delete().eq("group_id", gid).eq("tech_id", tid)
-      : await supabase.from("assembly_group_members").insert({ group_id: gid, tech_id: tid });
-    if (error) { toast.error(error.message); return; }
-    onChanged();
+
+  const create = async () => {
+    if (!name.trim() || !activeDept) return;
+    const done = await run(supabase.from("department_groups").insert({
+      department: activeDept, name: name.trim(), supervisor_id: sup ? Number(sup) : null,
+    }), "اتضافت المجموعة");
+    if (done) { setName(""); setSup(""); }
   };
+  const remove = async (g: GroupRow) => {
+    const ok = await confirm({
+      title: `حذف ${g.name}؟`,
+      message: "الأعضاء هيرجعوا \"بدون مجموعة\"، وسجلات الحضور مش هتتأثر.",
+      tone: "danger", confirmText: "حذف",
+    });
+    if (ok) run(supabase.from("department_groups").delete().eq("id", g.id), "اتحذفت المجموعة");
+  };
+
   return (
-    <Modal open={open} onClose={onClose} title="المجاميع" description="كل مجموعة تابعة لقسم، ليها مشرف وأعضاء" size="md">
-      <div className="space-y-4 max-h-[70vh] overflow-y-auto">
-        <div className="rounded-lg border border-border/60 p-3 space-y-2">
-          <p className="text-[11px] text-subtext">مجموعة جديدة</p>
-          <div className="grid grid-cols-12 gap-2">
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم المجموعة" className="eg-input col-span-4" />
-            <select value={dept} onChange={e => setDept(e.target.value)} className="eg-select col-span-3">
-              <option value="">— القسم —</option>
-              {departmentList.map(d => <option key={d.code} value={d.code}>{d.name_ar}</option>)}
-            </select>
-            <select value={sup} onChange={e => setSup(e.target.value)} className="eg-select col-span-3">
+    <Modal open={open} onClose={onClose} title="إدارة المجموعات"
+      description="كل قسم بيتقسم لمجموعات: مشرف + أعضاء من الفنيين أو المساعدين" size="lg">
+      <div className="space-y-4">
+        {depts.length > 1 && (
+          <ChipRow>
+            {depts.map(d => (
+              <FilterChip key={d} active={activeDept === d} onClick={() => setDept(d)}>{deptLabel(d)}</FilterChip>
+            ))}
+          </ChipRow>
+        )}
+
+        {/* مجموعة جديدة */}
+        <div className="rounded-lg border border-border/60 p-3">
+          <p className="mb-2 text-xs font-semibold text-subtext">مجموعة جديدة في {deptLabel(activeDept)}</p>
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم المجموعة"
+              aria-label="اسم المجموعة" className="eg-input" />
+            <select value={sup} onChange={e => setSup(e.target.value)} aria-label="المشرف" className="eg-select">
               <option value="">— المشرف —</option>
               {supervisors.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <button type="button" onClick={create} disabled={busy || !name.trim() || !dept} className="eg-btn-primary col-span-2 justify-center">
+            <button type="button" onClick={create} disabled={busy || !name.trim()} className="eg-btn-primary justify-center">
               <Plus className="size-3.5" />إضافة
             </button>
           </div>
+          {supervisors.length === 0 && (
+            <p className="mt-2 text-[11px] text-subtext">مفيش حد بدرجة &quot;مشرف&quot; في القسم ده، غيّر درجته من صفحة الفنيين.</p>
+          )}
         </div>
-        {groups.map(g => {
-          const memIds = new Set(groupMembers.filter(m => m.group_id === g.id).map(m => m.tech_id));
+
+        {deptGroups.length === 0 ? (
+          <p className="py-3 text-center text-xs text-subtext">مفيش مجموعات في القسم ده لسه</p>
+        ) : deptGroups.map(g => {
+          const members = groupMembers.filter(m => m.group_id === g.id).map(m => nameOf.get(m.tech_id)).filter((t): t is Technician => !!t);
           return (
-            <div key={g.id} className="rounded-lg border border-border/60 p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-bold text-text">{g.name}</span>
-                <span className="text-[11px] text-subtext">
-                  {departmentList.find(d => d.code === g.department_code)?.name_ar ?? "—"} · {g.supervisorName ? `مشرف: ${g.supervisorName}` : "بدون مشرف"}
-                </span>
+            <div key={g.id} className="space-y-2.5 rounded-lg border border-border/60 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="me-auto text-sm font-bold text-text">{g.name}</span>
+                <select value={g.supervisor_id ?? ""} disabled={busy} aria-label={`مشرف ${g.name}`} className="eg-select eg-input-sm w-44"
+                  onChange={e => run(supabase.from("department_groups")
+                    .update({ supervisor_id: e.target.value ? Number(e.target.value) : null }).eq("id", g.id))}>
+                  <option value="">— بدون مشرف —</option>
+                  {supervisors.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button type="button" onClick={() => remove(g)} disabled={busy}
+                  aria-label={`حذف ${g.name}`} className="eg-btn-danger-soft eg-btn-sm eg-btn-icon">
+                  <Trash2 className="size-3.5" />
+                </button>
               </div>
+
               <div className="flex flex-wrap gap-1.5">
-                {technicians.map(t => {
-                  const on = memIds.has(t.id);
-                  return (
-                    <button key={t.id} type="button" onClick={() => toggleMember(g.id, t.id, on)}
-                      className={cn("inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]",
-                        on ? "border-accent/50 bg-accent/15 text-accent" : "border-border bg-card2 text-subtext hover:text-text")}>
-                      {on ? <Check className="size-3" /> : <Plus className="size-3" />}{t.name}
+                {members.length === 0 && <span className="text-[11px] text-subtext">مفيش أعضاء</span>}
+                {members.map(t => (
+                  <span key={t.id} className="eg-chip inline-flex items-center gap-1.5">
+                    {t.name}
+                    {t.grade && <span className="text-[10px] text-subtext">{t.grade}</span>}
+                    <button type="button" disabled={busy} aria-label={`إزالة ${t.name}`}
+                      onClick={() => run(supabase.from("department_group_members").delete().eq("group_id", g.id).eq("tech_id", t.id))}
+                      className="text-subtext hover:text-danger">
+                      <X className="size-3" />
                     </button>
-                  );
-                })}
+                  </span>
+                ))}
               </div>
+
+              <select value="" disabled={busy || freeMembers.length === 0} aria-label={`إضافة عضو لـ ${g.name}`} className="eg-select eg-input-sm w-full sm:w-64"
+                onChange={e => e.target.value && run(supabase.from("department_group_members")
+                  .insert({ group_id: g.id, tech_id: Number(e.target.value) }))}>
+                <option value="">{freeMembers.length ? "+ إضافة عضو" : "كل الفنيين والمساعدين متوزعين"}</option>
+                {freeMembers.map(t => <option key={t.id} value={t.id}>{t.name} ({t.grade})</option>)}
+              </select>
             </div>
           );
         })}
-        {groups.length === 0 && <p className="text-xs text-subtext text-center py-3">مفيش مجاميع بعد</p>}
       </div>
     </Modal>
   );
