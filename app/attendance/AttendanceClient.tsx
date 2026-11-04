@@ -30,7 +30,7 @@ const PERM_OPTS = ["—", "إذن ساعتين صباحي", "إذن ساعتين
 
 type AttRow = { tech_id: number; status: string; permission: string; overtime: boolean };
 type YearAttRow = { tech_id: number; date: string; status: string };
-// تحميل فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
+// تعيين فني على بند أمر شغل في اليوم (الفني ممكن يكون ليه أكتر من بند)
 type Assignment = { key: string; id?: number; tech_id: number; wo_id: number | null; item_id: number | null; task: string };
 // مجموعة في قسم: مشرف + أعضاء (فنيين أو مساعدين)
 type GroupRow = { id: number; department: string; name: string; supervisor_id: number | null };
@@ -105,7 +105,7 @@ export default function AttendanceClient({
         .select("id, tech_id, work_order_item_id, task, item:work_order_items(wo_id)")
         .eq("date", date).in("tech_id", techIds).order("id", { ascending: true }),
     ]);
-    if (asg.error) toast.error("تعذّر تحميل التحميلات: " + asg.error.message);
+    if (asg.error) toast.error("تعذّر تحميل التعيينات: " + asg.error.message);
     const asgNext: Assignment[] = (asg.data ?? []).map((r: any) => ({
       key: `s${r.id}`,
       id: r.id,
@@ -171,6 +171,32 @@ export default function AttendanceClient({
       return;
     }
 
+    // ─── تفاصيل الإشعار: إيه اللي اتغير لكل فني (إشعار بس، من غير إيميل) ───
+    const techName = (id: number) => techById.get(id)?.name ?? `#${id}`;
+    const asgLabel = (a: Assignment) => {
+      const it = assignableItems.find(i => i.id === a.item_id);
+      return it ? `${it.wo_number} #${it.item_no}` : "بند";
+    };
+    const notifyLines: { label: string; value: string }[] = [];
+    changed.forEach(r => {
+      const s = saved.get(r.tech_id);
+      const parts: string[] = [];
+      if (!s || s.status !== r.status) parts.push(`الحضور: ${s?.status ?? "—"} ← ${r.status}`);
+      if (!s || s.permission !== r.permission) parts.push(`الإذن: ${s?.permission ?? "—"} ← ${r.permission}`);
+      if (!s || s.overtime !== r.overtime) parts.push(`عمل إضافي: ${r.overtime ? "نعم" : "لا"}`);
+      if (parts.length) notifyLines.push({ label: techName(r.tech_id), value: parts.join(" · ") });
+    });
+    assignments.filter(a => !a.id && a.item_id).forEach(a =>
+      notifyLines.push({ label: techName(a.tech_id), value: `تعيين جديد: ${asgLabel(a)}${a.task ? ` — ${a.task}` : ""}` }));
+    savedAssign.filter(a => a.id && !assignments.some(x => x.id === a.id && x.item_id)).forEach(a =>
+      notifyLines.push({ label: techName(a.tech_id), value: `إلغاء تعيين: ${asgLabel(a)}` }));
+    const shownLines = notifyLines.slice(0, 8);
+    const hiddenCount = notifyLines.length - shownLines.length;
+    const notifyDetails = [
+      ...shownLines,
+      ...(hiddenCount > 0 ? [{ label: "…", value: `و${hiddenCount} تعديل تاني` }] : []),
+    ];
+
     setSaving(true);
     try {
       const attRows = changed
@@ -204,7 +230,7 @@ export default function AttendanceClient({
         ops.push(supabase.from("permissions").delete().in("tech_id", permDeleteIds).eq("date", date));
       }
 
-      // التحميلات: اللي اتشالت، واللي اتضافت، واللي اتغير بندها أو نصها
+      // التعيينات: اللي اتشالت، واللي اتضافت، واللي اتغير بندها أو نصها
       const keepIds = new Set(assignments.filter(a => a.id && a.item_id).map(a => a.id!));
       const asgDeleteIds = savedAssign.filter(a => a.id && !keepIds.has(a.id)).map(a => a.id!);
       const asgInserts = assignments
@@ -233,7 +259,7 @@ export default function AttendanceClient({
     }
     setSaving(false);
     setSavedSnapshot(JSON.stringify(rows));
-    await load();   // نجيب التحميلات بالـ IDs الجديدة
+    await load();   // نجيب التعيينات بالـ IDs الجديدة
 
     if (date.slice(0, 4) === today().slice(0, 4)) {
       setYearAttendance(prev => {
@@ -253,9 +279,11 @@ export default function AttendanceClient({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: "📅 تسجيل حضور جديد",
-        body: `تم تسجيل الحضور بتاريخ ${date}`,
+        title: `تعديل حضور — ${date}`,
+        body: `${notifyLines.length} تعديل`,
+        details: notifyDetails,
         url: "/attendance",
+        email: false,   // الإيميل بيتبعت مرة واحدة 4 العصر، مش مع كل تعديل
       }),
     }).catch(() => {});
 
@@ -493,7 +521,7 @@ export default function AttendanceClient({
                         <th>الاسم</th>
                         <th className="w-44">الحضور</th>
                         <th className="w-56">الإذن</th>
-                        <th className="w-64">التحميل</th>
+                        <th className="w-64">التعيين</th>
                         <th className="w-24 text-center">عمل إضافي</th>
                       </tr>
                     </thead>
@@ -570,8 +598,8 @@ export default function AttendanceClient({
                                       );
                                     })}
                                     <button type="button" onClick={() => setAssignTech(r.tech_id)}
-                                      aria-label={`تحميل ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
-                                      {mine.length ? "تعديل" : "+ تحميل"}
+                                      aria-label={`تعيين ${tech.name}`} className="eg-btn-ghost eg-btn-sm">
+                                      {mine.length ? "تعديل" : "+ تعيين"}
                                     </button>
                                   </div>
                                 );
@@ -707,12 +735,12 @@ export default function AttendanceClient({
         )}
       </PageBody>
 
-      {/* ── تحميل الفني على بنود الأوامر ── */}
+      {/* ── تعيين الفني على بنود الأوامر ── */}
       <Modal open={assignTech !== null} onClose={() => setAssignTech(null)}
-        title={`تحميل ${techById.get(assignTech ?? -1)?.name ?? ""}`} description={`يوم ${date}`} size="md">
+        title={`تعيين ${techById.get(assignTech ?? -1)?.name ?? ""}`} description={`يوم ${date}`} size="md">
         <div className="space-y-3">
           {assignments.filter(a => a.tech_id === assignTech).length === 0 && (
-            <p className="text-xs text-subtext">مفيش تحميلات للفني ده في اليوم ده</p>
+            <p className="text-xs text-subtext">مفيش تعيينات للفني ده في اليوم ده</p>
           )}
           {assignments.filter(a => a.tech_id === assignTech).map(a => {
             const woList = Array.from(new Map(assignableItems.map(i => [i.wo_id, i.wo_number])).entries());
@@ -754,8 +782,8 @@ export default function AttendanceClient({
           })}
           <button type="button"
             onClick={() => setAssignments(prev => [...prev, { key: `n${Date.now()}`, tech_id: assignTech!, wo_id: null, item_id: null, task: "" }])}
-            className="eg-btn-ghost eg-btn-sm">+ إضافة تحميل</button>
-          <p className="text-[11px] text-subtext">التحميلات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
+            className="eg-btn-ghost eg-btn-sm">+ إضافة تعيين</button>
+          <p className="text-[11px] text-subtext">التعيينات بتتحفظ مع زرار "حفظ" في أعلى الصفحة.</p>
         </div>
       </Modal>
 
