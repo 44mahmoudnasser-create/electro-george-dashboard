@@ -30,7 +30,7 @@ export type CardInput = {
 };
 
 const HOURS_PER_DAY = 8;
-const OVERTIME_PER_PERSON = 3;
+const OVERTIME_PER_PERSON = 4;
 const fmtHours = (n: number) => String(Math.round(n * 100) / 100);
 
 const fmtDM = (iso: string) => {
