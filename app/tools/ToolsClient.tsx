@@ -10,7 +10,8 @@ import { Page, PageHeader, PageBody, SectionHeader } from "@/components/ui/Page"
 import { StatCard } from "@/components/ui/StatCard";
 import { SearchInput } from "@/components/ui/Filters";
 import { useToast } from "@/components/ui/Toast";
-import { Plus, Save, Hammer, Power, PowerOff, ListPlus, Boxes, MousePointerClick } from "lucide-react";
+import { Plus, Save, Hammer, Power, PowerOff, ListPlus, Boxes, MousePointerClick, PackageOpen } from "lucide-react";
+import { HOLDERS_SELECT, flattenHolders, type Holder } from "@/lib/custody-holders";
 import { cn } from "@/lib/utils";
 
 type Tool = {
@@ -41,16 +42,31 @@ function TypeBadge({ consumable, className }: { consumable: boolean; className?:
   );
 }
 
+type TechLite = { id: number; name: string; department: string | null };
+
 export default function ToolsClient({
-  initialTools, initialItems, departments,
+  initialTools, initialItems, initialHolders, technicians, departments,
 }: {
-  initialTools: Tool[]; initialItems: Item[]; departments: string[];
+  initialTools: Tool[]; initialItems: Item[]; initialHolders: Holder[];
+  technicians: TechLite[]; departments: string[];
 }) {
   const toast = useToast();
   const [tools, setTools] = useState<Tool[]>(initialTools);
   const [items, setItems] = useState<Item[]>(initialItems);
   const [selectedId, setSelectedId] = useState<number | null>(initialTools[0]?.id ?? null);
   const [search, setSearch] = useState("");
+  // العهد المفتوحة (مع الفنيين) — بتتحدث بعد أي صرف
+  const [holders, setHolders] = useState<Holder[]>(initialHolders);
+  const holdersOf = (toolId: number) => holders.filter(h => h.tool_id === toolId);
+
+  // ─── تسجيل صرف الأداة لفني ───
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issueTechId, setIssueTechId] = useState("");
+  const [issueQty, setIssueQty] = useState("1");
+  const [issueSerials, setIssueSerials] = useState<number[]>([]);
+  const [issueNote, setIssueNote] = useState("");
+  const [issueBusy, setIssueBusy] = useState(false);
+  const [issueError, setIssueError] = useState("");
 
   const flash = (ok: boolean, text: string) => toast.show(ok, text);
 
@@ -61,6 +77,46 @@ export default function ToolsClient({
   );
 
   const itemsOf = (toolId: number) => items.filter(i => i.tool_id === toolId);
+
+  const fetchHolders = async () => {
+    const { data } = await supabase.from("custody").select(HOLDERS_SELECT)
+      .eq("status", "مستلمة").gt("open_qty", 0).order("issued_at");
+    if (data) setHolders(flattenHolders(data));
+  };
+
+  const openIssue = () => {
+    setIssueTechId(""); setIssueQty("1"); setIssueSerials([]); setIssueNote(""); setIssueError("");
+    setIssueOpen(true);
+  };
+
+  const toggleIssueSerial = (id: number) =>
+    setIssueSerials(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const submitIssue = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!selected || issueBusy) return;
+    if (!issueTechId) { setIssueError("اختار الفني"); return; }
+    const consumable = selected.is_consumable;
+    if (consumable && !(parseFloat(issueQty) > 0)) { setIssueError("أدخل كمية صحيحة"); return; }
+    if (!consumable && issueSerials.length === 0) { setIssueError("اختار قطعة واحدة على الأقل"); return; }
+    setIssueBusy(true); setIssueError("");
+    const { data, error: e2 } = await supabase.rpc("issue_custody", {
+      p_tech_id: Number(issueTechId),
+      p_tool_id: selected.id,
+      p_qty: consumable ? parseFloat(issueQty) : 1,
+      p_serial_ids: consumable ? null : issueSerials,
+      p_note: issueNote.trim() || null,
+    });
+    setIssueBusy(false);
+    if (e2) { setIssueError(e2.message); return; }
+    if (!consumable) {
+      setItems(prev => prev.map(i => issueSerials.includes(i.id) ? { ...i, status: "مع فني" } : i));
+    }
+    await fetchHolders();
+    const techName = technicians.find(t => String(t.id) === issueTechId)?.name ?? "";
+    setIssueOpen(false);
+    flash(true, `تم صرف ${data}${consumable ? "" : " قطعة"} لـ ${techName}`);
+  };
   const countBy = (toolId: number) => {
     const list = itemsOf(toolId);
     const c: Record<string, number> = {};
@@ -238,6 +294,50 @@ export default function ToolsClient({
                   </div>
                 )}
 
+                <div className="eg-card overflow-hidden !p-0">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
+                    <div>
+                      <div className="text-sm font-bold text-text">مع الفنيين</div>
+                      <div className="text-[11px] text-subtext">
+                        {selected.is_consumable
+                          ? `مصروف لسه مع الفنيين: ${holdersOf(selected.id).reduce((a, h) => a + h.open_qty, 0)} ${selected.unit}`
+                          : `${holdersOf(selected.id).length} قطعة مع الفنيين · متاح ${sel["متاح"] ?? 0}`}
+                      </div>
+                    </div>
+                    <button type="button" onClick={openIssue} className="eg-btn-primary eg-btn-sm">
+                      <PackageOpen className="size-3.5" />تسجيل صرف
+                    </button>
+                  </div>
+                  {holdersOf(selected.id).length ? (
+                    <div className="overflow-x-auto">
+                      <table className="eg-table eg-table-compact">
+                        <thead>
+                          <tr>
+                            <th>الفني</th>
+                            <th>القسم</th>
+                            <th>{selected.is_consumable ? "الكمية" : "الرقم التسلسلي"}</th>
+                            <th className="w-32">تاريخ الصرف</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {holdersOf(selected.id).map(h => (
+                            <tr key={h.id}>
+                              <td className="font-medium text-text">{h.tech_name}</td>
+                              <td className="text-subtext">{h.tech_dept ?? "—"}</td>
+                              <td className={selected.is_consumable ? "tabular-nums" : "font-mono text-text"}>
+                                {selected.is_consumable ? `${h.open_qty} ${selected.unit}` : h.serial_no}
+                              </td>
+                              <td className="tabular-nums text-subtext">{h.issued_at}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <EmptyState compact icon={PackageOpen} message="مفيش حد معاه الأداة دي دلوقتي" />
+                  )}
+                </div>
+
                 {!selected.is_consumable && (
                   <div className="eg-card space-y-3 !p-4">
                     <SectionHeader icon={ListPlus} title="إضافة قطع برقم تسلسلي" description="رقم في كل سطر (أو الصقه من إكسل)" />
@@ -293,6 +393,52 @@ export default function ToolsClient({
           </div>
         </div>
       </PageBody>
+
+      {/* ═══ مودال تسجيل صرف ═══ */}
+      <Modal open={issueOpen} onClose={() => setIssueOpen(false)} title={selected ? `صرف ${selected.name}` : "صرف أداة"} size="sm">
+        <form onSubmit={submitIssue} className="space-y-4">
+          <Field label="الفني" required htmlFor="issue-tech">
+            <select id="issue-tech" value={issueTechId} onChange={e => setIssueTechId(e.target.value)} className="eg-select">
+              <option value="">— اختار —</option>
+              {technicians.map(t => (
+                <option key={t.id} value={t.id}>{t.name}{t.department ? ` · ${t.department}` : ""}</option>
+              ))}
+            </select>
+          </Field>
+
+          {selected?.is_consumable ? (
+            <Field label={`الكمية (${selected.unit})`} required htmlFor="issue-qty">
+              <input id="issue-qty" type="number" min="0" step="any" value={issueQty}
+                onChange={e => setIssueQty(e.target.value)} className="eg-input" />
+            </Field>
+          ) : (
+            <Field label="القطع المتاحة" required hint="اختار القطع اللي هتتصرف">
+              {selected && itemsOf(selected.id).filter(i => i.status === "متاح").length ? (
+                <div className="max-h-48 space-y-1.5 overflow-y-auto rounded-lg border border-border/60 p-2">
+                  {itemsOf(selected.id).filter(i => i.status === "متاح").map(i => (
+                    <label key={i.id} className="flex cursor-pointer items-center gap-2 font-mono text-xs text-text">
+                      <input type="checkbox" checked={issueSerials.includes(i.id)} onChange={() => toggleIssueSerial(i.id)} />
+                      {i.serial_no}
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-subtext">مفيش قطع متاحة للصرف</p>
+              )}
+            </Field>
+          )}
+
+          <Field label="ملاحظة" htmlFor="issue-note">
+            <input id="issue-note" value={issueNote} onChange={e => setIssueNote(e.target.value)} className="eg-input" />
+          </Field>
+
+          <FormError>{issueError}</FormError>
+          <button type="submit" disabled={issueBusy} className="eg-btn-primary w-full justify-center">
+            {issueBusy && <Spinner className="size-3.5" />}
+            {issueBusy ? "جاري الصرف..." : "تأكيد الصرف"}
+          </button>
+        </form>
+      </Modal>
 
       {/* ═══ مودال أداة جديدة ═══ */}
       <Modal open={addOpen} onClose={closeAdd} title="أداة جديدة">
