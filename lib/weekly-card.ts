@@ -154,6 +154,10 @@ export function computeWeeklyCard(input: CardInput) {
       if (rows.length === 0) {
         rows.push({ day: "—", woNo: "لا توجد تعيينات في الفترة", hours: "0", rework: "", overtime: "", notes: "" });
       }
+      // الفورم الأصلي فيه 7 صفوف، فبنكمّل الصفوف الفاضية عشان الشكل يفضل زي الفورم
+      while (rows.length < 7) {
+        rows.push({ day: "", woNo: "", hours: "", rework: "", overtime: "", notes: "" });
+      }
 
       const dept = deptLabel(g.department);
       const absentNames = Array.from(absentIds).map(id => techById.get(id)?.name ?? "").filter(Boolean);
