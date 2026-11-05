@@ -54,8 +54,7 @@ export default async function AttendancePage() {
   // البنود المعتمدة وغير المنتهية بس (اللي حالتها مكتمل أو تم التسليم مابتظهرش في التعيين)
   const { data: itemRows } = await supabase
     .from("work_order_items")
-    .select("id, wo_id, item_no, description, job_status, work_order:work_orders(wo_number)")
-    .eq("status", "approved")
+    .select("id, wo_id, item_no, description, status, job_status, work_order:work_orders(wo_number)")
     .in("job_status", ["لم يبدأ", "جاري", "متوقف"])
     .order("wo_id", { ascending: true })
     .order("item_no", { ascending: true });
@@ -64,6 +63,7 @@ export default async function AttendancePage() {
     wo_id: i.wo_id,
     item_no: i.item_no,
     description: i.description,
+    approved: i.status === "approved",
     wo_number: (Array.isArray(i.work_order) ? i.work_order[0]?.wo_number : i.work_order?.wo_number) ?? "—",
   }));
 

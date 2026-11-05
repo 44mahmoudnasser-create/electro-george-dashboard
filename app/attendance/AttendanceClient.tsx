@@ -39,7 +39,7 @@ type Totals = { techs: number; present: number; absent: number; leave: number; m
 // قطعة من القسم: مجموعة، أو "بدون مجموعة" (ids: المشرف أول واحد)
 type Section = { key: string; title: string; sub: string; ids: number[] };
 type PerTechRow = { tech: any; present: number; absent: number; leave: number; mission: number; records: YearAttRow[] };
-type AssignableItem = { id: number; wo_id: number; item_no: number; description: string | null; wo_number: string };
+type AssignableItem = { id: number; wo_id: number; item_no: number; description: string | null; wo_number: string; approved?: boolean };
 type Tab = "daily" | "stats";
 
 export default function AttendanceClient({
@@ -805,7 +805,7 @@ export default function AttendanceClient({
                     <select value={a.item_id ?? ""} disabled={!a.wo_id} className="eg-select"
                       onChange={e => update({ item_id: e.target.value ? Number(e.target.value) : null })}>
                       <option value="">— اختار —</option>
-                      {itemsOfWo.map(i => <option key={i.id} value={i.id}>#{i.item_no} {i.description ?? ""}</option>)}
+                      {itemsOfWo.map(i => <option key={i.id} value={i.id}>#{i.item_no} {i.description ?? ""}{i.approved === false ? " (غير معتمد)" : ""}</option>)}
                     </select>
                   </Field>
                 </div>
