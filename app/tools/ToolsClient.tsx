@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 
 type Tool = {
   id: number; name: string; category: string | null; category_id: number | null; is_consumable: boolean; unit: string;
-  department: string | null; active: boolean;
+  department: string | null; active: boolean; stock_qty: number;
 };
 type Category = { id: number; name: string };
 type Item = { id: number; tool_id: number; serial_no: string; status: string; notes: string | null };
@@ -29,7 +29,6 @@ const TYPE_OPTIONS = [
 ];
 
 // رقم في كل سطر، أو مفصولين بفاصلة / Tab (لصق من إكسل)
-const parseSerials = (text: string) => text.split(/\r?\n|,|\t/).map(s => s.trim()).filter(Boolean);
 
 // شارة نوع الأداة
 function TypeBadge({ consumable, className }: { consumable: boolean; className?: string }) {
@@ -108,6 +107,9 @@ export default function ToolsClient({
     if (!issueTechId) { setIssueError("اختار الفني"); return; }
     const consumable = selected.is_consumable;
     if (consumable && !(parseFloat(issueQty) > 0)) { setIssueError("أدخل كمية صحيحة"); return; }
+    if (consumable && parseFloat(issueQty) > selected.stock_qty) {
+      setIssueError(`المتاح في المخزن ${selected.stock_qty} ${selected.unit} بس`); return;
+    }
     if (!consumable && issueSerials.length === 0) { setIssueError("اختار قطعة واحدة على الأقل"); return; }
     setIssueBusy(true); setIssueError("");
     const { data, error: e2 } = await supabase.rpc("issue_custody", {
@@ -121,6 +123,9 @@ export default function ToolsClient({
     if (e2) { setIssueError(e2.message); return; }
     if (!consumable) {
       setItems(prev => prev.map(i => issueSerials.includes(i.id) ? { ...i, status: "مع فني" } : i));
+    } else {
+      const left = selected.stock_qty - parseFloat(issueQty);
+      setTools(prev => prev.map(t => t.id === selected.id ? { ...t, stock_qty: left } : t));
     }
     await fetchHolders();
     const techName = technicians.find(t => String(t.id) === issueTechId)?.name ?? "";
@@ -159,6 +164,23 @@ export default function ToolsClient({
     setSelectedId(data.id);
     setAddOpen(false); setForm(EMPTY_FORM);
     flash(true, `تمت إضافة ${data.name}`);
+  };
+
+  /* ─────────── مخزون الكمية (المستهلكة) ─────────── */
+  const [stockAdd, setStockAdd] = useState("");
+  const [stockBusy, setStockBusy] = useState(false);
+
+  const addStock = async () => {
+    if (!selected || stockBusy) return;
+    const qty = parseFloat(stockAdd);
+    if (!(qty > 0)) { flash(false, "أدخل كمية صحيحة"); return; }
+    setStockBusy(true);
+    const { data, error: e } = await supabase.rpc("add_tool_stock", { p_tool_id: selected.id, p_qty: qty });
+    setStockBusy(false);
+    if (e) { flash(false, e.message); return; }
+    setTools(prev => prev.map(t => t.id === selected.id ? { ...t, stock_qty: Number(data) } : t));
+    setStockAdd("");
+    flash(true, `اتضافت ${qty} ${selected.unit} للمخزن`);
   };
 
   /* ─────────── إدارة التصنيفات ─────────── */
@@ -224,31 +246,8 @@ export default function ToolsClient({
     flash(true, t.active ? `تم تعطيل ${t.name}` : `تم تفعيل ${t.name}`);
   };
 
-  /* ─────────── أرقام تسلسلية ─────────── */
-  const [serialsText, setSerialsText] = useState("");
-  const [addingSerials, setAddingSerials] = useState(false);
-
-  const addSerials = async () => {
-    if (!selected || addingSerials) return;
-    const serials = parseSerials(serialsText);
-    if (serials.length === 0) return;
-    setAddingSerials(true);
-    const { data, error: e } = await supabase.rpc("add_tool_items", {
-      p_tool_id: selected.id, p_serials: serials,
-    });
-    setAddingSerials(false);
-    if (e) { flash(false, e.message); return; }
-    // نجيب القطع الجديدة من الداتابيز علشان الترتيب والـ id يبقوا صح
-    const { data: fresh } = await supabase.from("tool_items")
-      .select("id, tool_id, serial_no, status, notes").eq("tool_id", selected.id).order("serial_no");
-    if (fresh) setItems(prev => [...prev.filter(i => i.tool_id !== selected.id), ...(fresh as Item[])]);
-    setSerialsText("");
-    flash(true, `تمت إضافة ${data} قطعة`);
-  };
-
   const sel = selected ? countBy(selected.id) : {};
   const selItems = selected ? itemsOf(selected.id) : [];
-  const serialCount = parseSerials(serialsText).length;
 
   const newToolButton = (
     <div className="flex items-center gap-2">
@@ -318,6 +317,9 @@ export default function ToolsClient({
                             {!t.is_consumable && (
                               <span className="tabular-nums">· متاح {c["متاح"] ?? 0} / إجمالي {itemsOf(t.id).length}</span>
                             )}
+                            {t.is_consumable && (
+                              <span className="tabular-nums">· متاح {t.stock_qty} {t.unit}</span>
+                            )}
                           </div>
                         </button>
                       </li>
@@ -374,6 +376,27 @@ export default function ToolsClient({
                   </div>
                 )}
 
+                {selected.is_consumable && (
+                  <div className="eg-card space-y-3 !p-4">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] text-subtext">المتاح للصرف في المخزن</div>
+                        <div className="text-2xl font-bold tabular-nums text-text">
+                          {selected.stock_qty} <span className="text-sm font-medium text-subtext">{selected.unit}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="number" min="0" step="any" value={stockAdd} onChange={e => setStockAdd(e.target.value)}
+                          aria-label="الكمية اللي هتتضاف للمخزن" placeholder="الكمية" className="eg-input eg-input-sm w-28" />
+                        <button type="button" onClick={addStock} disabled={stockBusy || !(parseFloat(stockAdd) > 0)}
+                          className="eg-btn-primary eg-btn-sm">
+                          {stockBusy ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}إضافة للمخزن
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="eg-card overflow-hidden !p-0">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
                     <div>
@@ -417,25 +440,6 @@ export default function ToolsClient({
                     <EmptyState compact icon={PackageOpen} message="مفيش حد معاه الأداة دي دلوقتي" />
                   )}
                 </div>
-
-                {!selected.is_consumable && (
-                  <div className="eg-card space-y-3 !p-4">
-                    <SectionHeader icon={ListPlus} title="إضافة قطع برقم تسلسلي" description="رقم في كل سطر (أو الصقه من إكسل)" />
-                    <textarea value={serialsText} onChange={e => setSerialsText(e.target.value)} rows={3} dir="ltr"
-                      aria-label="الأرقام التسلسلية"
-                      className="eg-input resize-y font-mono text-xs leading-5" placeholder={"HM-001\nHM-002\nHM-003"} />
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] tabular-nums text-subtext">
-                        {serialCount > 0 ? `${serialCount} رقم جاهز للإضافة` : ""}
-                      </span>
-                      <button type="button" onClick={addSerials} disabled={addingSerials || !serialsText.trim()}
-                        className="eg-btn-primary eg-btn-sm">
-                        {addingSerials ? <Spinner className="size-3.5" /> : <Save className="size-3.5" />}
-                        {addingSerials ? "جاري الإضافة..." : "إضافة القطع"}
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {!selected.is_consumable && (
                   <div className="eg-card overflow-hidden !p-0">
@@ -530,8 +534,8 @@ export default function ToolsClient({
           </Field>
 
           {selected?.is_consumable ? (
-            <Field label={`الكمية (${selected.unit})`} required htmlFor="issue-qty">
-              <input id="issue-qty" type="number" min="0" step="any" value={issueQty}
+            <Field label={`الكمية (${selected.unit}) — المتاح ${selected.stock_qty}`} required htmlFor="issue-qty">
+              <input id="issue-qty" type="number" min="0" max={selected.stock_qty} step="any" value={issueQty}
                 onChange={e => setIssueQty(e.target.value)} className="eg-input" />
             </Field>
           ) : (
