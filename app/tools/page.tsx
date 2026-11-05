@@ -12,11 +12,12 @@ export default async function ToolsPage() {
   if (!user) redirect("/login");
   if (role !== "admin" && role !== "manager") redirect("/dashboard");
 
-  const [{ data: tools }, { data: items }, { data: techs }, { data: holders }] = await Promise.all([
+  const [{ data: tools }, { data: items }, { data: techs }, { data: holders }, { data: categories }] = await Promise.all([
     supabase.from("tools").select("*").order("name"),
     supabase.from("tool_items").select("id, tool_id, serial_no, status, notes").order("serial_no"),
     supabase.from("technicians").select("id, name, department").order("name"),
     supabase.from("custody").select(HOLDERS_SELECT).eq("status", "مستلمة").gt("open_qty", 0).order("issued_at"),
+    supabase.from("tool_categories").select("id, name").order("name"),
   ]);
 
   const departments = Array.from(new Set((techs ?? []).map(t => t.department).filter(Boolean) as string[])).sort();
@@ -27,6 +28,7 @@ export default async function ToolsPage() {
         initialTools={tools ?? []}
         initialItems={items ?? []}
         initialHolders={flattenHolders(holders ?? [])}
+        initialCategories={(categories ?? []) as { id: number; name: string }[]}
         technicians={(techs ?? []) as { id: number; name: string; department: string | null }[]}
         departments={departments}
       />

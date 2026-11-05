@@ -15,12 +15,13 @@ import { HOLDERS_SELECT, flattenHolders, type Holder } from "@/lib/custody-holde
 import { cn } from "@/lib/utils";
 
 type Tool = {
-  id: number; name: string; category: string | null; is_consumable: boolean; unit: string;
+  id: number; name: string; category: string | null; category_id: number | null; is_consumable: boolean; unit: string;
   department: string | null; active: boolean;
 };
+type Category = { id: number; name: string };
 type Item = { id: number; tool_id: number; serial_no: string; status: string; notes: string | null };
 
-const EMPTY_FORM = { name: "", category: "", is_consumable: false, unit: "عدد", department: "" };
+const EMPTY_FORM = { name: "", category_id: "", is_consumable: false, unit: "عدد", department: "" };
 
 const TYPE_OPTIONS = [
   { v: false, label: "قابلة لإعادة الاستخدام", hint: "برقم تسلسلي لكل قطعة" },
@@ -45,9 +46,9 @@ function TypeBadge({ consumable, className }: { consumable: boolean; className?:
 type TechLite = { id: number; name: string; department: string | null };
 
 export default function ToolsClient({
-  initialTools, initialItems, initialHolders, technicians, departments,
+  initialTools, initialItems, initialHolders, initialCategories, technicians, departments,
 }: {
-  initialTools: Tool[]; initialItems: Item[]; initialHolders: Holder[];
+  initialTools: Tool[]; initialItems: Item[]; initialHolders: Holder[]; initialCategories: Category[];
   technicians: TechLite[]; departments: string[];
 }) {
   const toast = useToast();
@@ -55,6 +56,11 @@ export default function ToolsClient({
   const [items, setItems] = useState<Item[]>(initialItems);
   const [selectedId, setSelectedId] = useState<number | null>(initialTools[0]?.id ?? null);
   const [search, setSearch] = useState("");
+  // التصنيفات (قابلة للإدارة) + فلاتر القايمة
+  const [categories, setCategories] = useState<Category[]>(initialCategories);
+  const [catFilter, setCatFilter] = useState<string>("الكل");   // "الكل" | "none" | id
+  const [typeFilter, setTypeFilter] = useState<string>("الكل"); // "الكل" | "consumable" | "reusable"
+  const catName = (id: number | null | undefined) => categories.find(c => c.id === id)?.name ?? null;
   // العهد المفتوحة (مع الفنيين) — بتتحدث بعد أي صرف
   const [holders, setHolders] = useState<Holder[]>(initialHolders);
   const holdersOf = (toolId: number) => holders.filter(h => h.tool_id === toolId);
@@ -72,8 +78,12 @@ export default function ToolsClient({
 
   const selected = tools.find(t => t.id === selectedId) ?? null;
   const filtered = useMemo(
-    () => tools.filter(t => !search || t.name.includes(search)),
-    [tools, search]
+    () => tools.filter(t =>
+      (!search || t.name.includes(search)) &&
+      (catFilter === "الكل" || (catFilter === "none" ? !t.category_id : String(t.category_id) === catFilter)) &&
+      (typeFilter === "الكل" || (typeFilter === "consumable" ? t.is_consumable : !t.is_consumable))
+    ),
+    [tools, search, catFilter, typeFilter]
   );
 
   const itemsOf = (toolId: number) => items.filter(i => i.tool_id === toolId);
@@ -138,7 +148,7 @@ export default function ToolsClient({
     setSaving(true); setError("");
     const { data, error: e } = await supabase.from("tools").insert({
       name: form.name.trim(),
-      category: form.category.trim() || null,
+      category_id: form.category_id ? Number(form.category_id) : null,
       is_consumable: form.is_consumable,
       unit: form.unit.trim() || "عدد",
       department: form.department || null,
@@ -149,6 +159,56 @@ export default function ToolsClient({
     setSelectedId(data.id);
     setAddOpen(false); setForm(EMPTY_FORM);
     flash(true, `تمت إضافة ${data.name}`);
+  };
+
+  /* ─────────── إدارة التصنيفات ─────────── */
+  const [catOpen, setCatOpen] = useState(false);
+  const [newCat, setNewCat] = useState("");
+  const [catBusy, setCatBusy] = useState(false);
+  const [editCat, setEditCat] = useState<{ id: number; name: string } | null>(null);
+
+  const createCategory = async (name: string): Promise<Category | null> => {
+    const clean = name.trim();
+    if (!clean) return null;
+    const { data, error: e } = await supabase.from("tool_categories").insert({ name: clean }).select("id, name").single();
+    if (e) { flash(false, e.message.includes("unique") ? "التصنيف ده موجود قبل كده" : e.message); return null; }
+    const cat = data as Category;
+    setCategories(prev => [...prev, cat].sort((a, b) => a.name.localeCompare(b.name, "ar")));
+    return cat;
+  };
+
+  const addCategoryFromManager = async () => {
+    if (catBusy) return;
+    setCatBusy(true);
+    const cat = await createCategory(newCat);
+    setCatBusy(false);
+    if (cat) { setNewCat(""); flash(true, `اتضاف تصنيف ${cat.name}`); }
+  };
+
+  const saveCategoryName = async () => {
+    if (!editCat || catBusy) return;
+    const clean = editCat.name.trim();
+    if (!clean) return;
+    setCatBusy(true);
+    const { error: e } = await supabase.from("tool_categories").update({ name: clean }).eq("id", editCat.id);
+    setCatBusy(false);
+    if (e) { flash(false, e.message.includes("unique") ? "الاسم ده مستخدم قبل كده" : e.message); return; }
+    setCategories(prev => prev.map(c => c.id === editCat.id ? { ...c, name: clean } : c)
+      .sort((a, b) => a.name.localeCompare(b.name, "ar")));
+    setEditCat(null);
+    flash(true, "اتعدّل اسم التصنيف");
+  };
+
+  const deleteCategory = async (c: Category) => {
+    if (catBusy) return;
+    setCatBusy(true);
+    const { error: e } = await supabase.from("tool_categories").delete().eq("id", c.id);
+    setCatBusy(false);
+    if (e) { flash(false, e.message); return; }
+    setCategories(prev => prev.filter(x => x.id !== c.id));
+    setTools(prev => prev.map(t => t.category_id === c.id ? { ...t, category_id: null } : t));
+    if (catFilter === String(c.id)) setCatFilter("الكل");
+    flash(true, `اتحذف تصنيف ${c.name}`);
   };
 
   /* ─────────── تفعيل / تعطيل ─────────── */
@@ -191,9 +251,14 @@ export default function ToolsClient({
   const serialCount = parseSerials(serialsText).length;
 
   const newToolButton = (
-    <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
-      <Plus className="size-3.5" />أداة جديدة
-    </button>
+    <div className="flex items-center gap-2">
+      <button onClick={() => setCatOpen(true)} className="eg-btn-ghost eg-btn-sm">
+        <ListPlus className="size-3.5" />التصنيفات
+      </button>
+      <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
+        <Plus className="size-3.5" />أداة جديدة
+      </button>
+    </div>
   );
 
   return (
@@ -212,6 +277,20 @@ export default function ToolsClient({
             <div className="eg-card overflow-hidden !p-0">
               <div className="border-b border-border/60 p-3">
                 <SearchInput value={search} onChange={setSearch} placeholder="بحث باسم الأداة" className="w-full" />
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label="فلتر التصنيف"
+                    className="eg-select eg-input-sm">
+                    <option value="الكل">كل التصنيفات</option>
+                    <option value="none">بدون تصنيف</option>
+                    {categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                  </select>
+                  <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="فلتر النوع"
+                    className="eg-select eg-input-sm">
+                    <option value="الكل">كل الأنواع</option>
+                    <option value="consumable">مستهلكة</option>
+                    <option value="reusable">قابلة لإعادة الاستخدام</option>
+                  </select>
+                </div>
               </div>
               {filtered.length > 0 ? (
                 <ul className="divide-y divide-border/50 lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto">
@@ -235,6 +314,7 @@ export default function ToolsClient({
                           </div>
                           <div className={cn("mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] leading-5 text-subtext", !t.active && "opacity-50")}>
                             <span>{t.department ?? "كل الأقسام"}</span>
+                            {catName(t.category_id) && <span>· {catName(t.category_id)}</span>}
                             {!t.is_consumable && (
                               <span className="tabular-nums">· متاح {c["متاح"] ?? 0} / إجمالي {itemsOf(t.id).length}</span>
                             )}
@@ -272,7 +352,7 @@ export default function ToolsClient({
                       <p className="mt-0.5 text-xs leading-5 text-subtext">
                         {selected.is_consumable ? "أداة مستهلكة — بتتصرف بالكمية" : "أداة قابلة لإعادة الاستخدام — كل قطعة برقم تسلسلي"}
                         {" · "}{selected.department ? `قسم ${selected.department}` : "كل الأقسام"}
-                        {selected.category ? ` · ${selected.category}` : ""}
+                        {catName(selected.category_id) ? ` · ${catName(selected.category_id)}` : ""}
                       </p>
                     </div>
                     <button type="button" onClick={() => toggleActive(selected)} disabled={toggling}
@@ -394,6 +474,49 @@ export default function ToolsClient({
         </div>
       </PageBody>
 
+      {/* ═══ مودال إدارة التصنيفات ═══ */}
+      <Modal open={catOpen} onClose={() => { setCatOpen(false); setEditCat(null); }} title="التصنيفات" size="sm">
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            <input value={newCat} onChange={e => setNewCat(e.target.value)} className="eg-input"
+              placeholder="اسم التصنيف الجديد" aria-label="اسم التصنيف الجديد" />
+            <button type="button" onClick={addCategoryFromManager} disabled={catBusy || !newCat.trim()}
+              className="eg-btn-primary eg-btn-sm shrink-0">
+              <Plus className="size-3.5" />إضافة
+            </button>
+          </div>
+          {categories.length === 0 ? (
+            <EmptyState compact icon={Boxes} message="مفيش تصنيفات لسه" />
+          ) : (
+            <ul className="divide-y divide-border/50 rounded-lg border border-border/60">
+              {categories.map(c => (
+                <li key={c.id} className="flex items-center gap-2 px-3 py-2">
+                  {editCat?.id === c.id ? (
+                    <>
+                      <input value={editCat.name} onChange={e => setEditCat({ id: c.id, name: e.target.value })}
+                        className="eg-input eg-input-sm flex-1" aria-label="اسم التصنيف" />
+                      <button type="button" onClick={saveCategoryName} disabled={catBusy} className="eg-btn-primary eg-btn-xs">حفظ</button>
+                      <button type="button" onClick={() => setEditCat(null)} className="eg-btn-ghost eg-btn-xs">إلغاء</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 truncate text-sm text-text">{c.name}</span>
+                      <span className="text-[11px] tabular-nums text-subtext">
+                        {tools.filter(t => t.category_id === c.id).length} أداة
+                      </span>
+                      <button type="button" onClick={() => setEditCat({ id: c.id, name: c.name })} className="eg-btn-ghost eg-btn-xs">تعديل</button>
+                      <button type="button" onClick={() => deleteCategory(c)} disabled={catBusy}
+                        className="eg-btn-danger-soft eg-btn-xs">حذف</button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[11px] text-subtext">لو حذفت تصنيف، الأدوات اللي فيه بتفضل من غير تصنيف.</p>
+        </div>
+      </Modal>
+
       {/* ═══ مودال تسجيل صرف ═══ */}
       <Modal open={issueOpen} onClose={() => setIssueOpen(false)} title={selected ? `صرف ${selected.name}` : "صرف أداة"} size="sm">
         <form onSubmit={submitIssue} className="space-y-4">
@@ -449,8 +572,22 @@ export default function ToolsClient({
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="التصنيف">
-              <input value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                className="eg-input" placeholder="مثال: يدوية" />
+              <select value={form.category_id} onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}
+                className="eg-select">
+                <option value="">— بدون تصنيف —</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <div className="mt-2 flex gap-2">
+                <input value={newCat} onChange={e => setNewCat(e.target.value)} className="eg-input eg-input-sm"
+                  placeholder="تصنيف جديد..." aria-label="تصنيف جديد" />
+                <button type="button" disabled={catBusy || !newCat.trim()} className="eg-btn-ghost eg-btn-sm shrink-0"
+                  onClick={async () => {
+                    const cat = await createCategory(newCat);
+                    if (cat) { setForm(f => ({ ...f, category_id: String(cat.id) })); setNewCat(""); }
+                  }}>
+                  <Plus className="size-3.5" />إضافة
+                </button>
+              </div>
             </Field>
             <Field label="الوحدة">
               <input value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} className="eg-input" />
