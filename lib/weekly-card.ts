@@ -159,6 +159,10 @@ export function computeWeeklyCard(input: CardInput) {
         rows.push({ day: "", woNo: "", hours: "", rework: "", overtime: "", notes: "" });
       }
 
+      // مجموع ساعات الصفوف (نفس الأرقام اللي في العمود)، ومجموع العمل الإضافي
+      const totalHours = rows.reduce((a, r) => a + (parseFloat(r.hours) || 0), 0);
+      const totalOvertime = rows.reduce((a, r) => a + (parseFloat(r.overtime) || 0), 0);
+
       const dept = deptLabel(g.department);
       const absentNames = Array.from(absentIds).map(id => techById.get(id)?.name ?? "").filter(Boolean);
       return {
@@ -169,6 +173,8 @@ export function computeWeeklyCard(input: CardInput) {
         members: String(members.length),
         absentPeople: String(absentIds.size),
         absentHours: String(absentDays * HOURS_PER_DAY),
+        totalHours: fmtHours(totalHours),
+        totalOvertime: fmtHours(totalOvertime),
         notes: absentNames.length ? `الغائبين: ${absentNames.join("، ")}` : "",
         rows,
       };
