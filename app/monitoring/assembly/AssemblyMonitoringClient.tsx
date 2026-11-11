@@ -41,6 +41,9 @@ export default function AssemblyMonitoringClient({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // بنود متحددة لتسجيلها على جروب واحد
+  const [bulkSel, setBulkSel] = useState<Set<number>>(new Set());
+  const [bulkGroup, setBulkGroup] = useState("");
 
   // فلاتر
   const [search, setSearch] = useState("");
@@ -257,6 +260,28 @@ export default function AssemblyMonitoringClient({
       </div>
 
       <div className="p-4 md:p-6 space-y-4">
+        {canEdit && bulkSel.size > 0 && (
+          <div className="eg-card flex flex-wrap items-center gap-3 !p-3">
+            <span className="text-sm text-text">تم تحديد <span className="font-bold tabular-nums">{bulkSel.size}</span> بند</span>
+            <select value={bulkGroup} onChange={e => setBulkGroup(e.target.value)} disabled={busy}
+              aria-label="اختار الجروب" className="eg-select !py-1.5 !text-xs w-56">
+              <option value="">— اختار الجروب —</option>
+              {groups.filter(g => g.active !== false).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            <button type="button" disabled={busy || !bulkGroup}
+              onClick={async () => {
+                const ok = await run(() => supabase.from("item_assembly").upsert(
+                  Array.from(bulkSel).map(id => ({ item_id: id, group_id: Number(bulkGroup) })),
+                  { onConflict: "item_id" }
+                ), `اتسجلت ${bulkSel.size} بند على الجروب`);
+                if (ok) { setBulkSel(new Set()); setBulkGroup(""); }
+              }}
+              className="eg-btn-primary !py-1.5 !text-xs disabled:opacity-40">
+              تسجيل على الجروب
+            </button>
+            <button type="button" onClick={() => setBulkSel(new Set())} className="eg-btn-ghost !py-1.5 !text-xs">إلغاء التحديد</button>
+          </div>
+        )}
         {notice && (
           <div className={cn("text-xs px-3 py-2 rounded-lg border",
             notice.ok ? "bg-success/10 border-success/30 text-success" : "bg-danger/10 border-danger/30 text-danger")}>
@@ -283,6 +308,14 @@ export default function AssemblyMonitoringClient({
               <table className="w-full text-xs border-collapse min-w-[1100px]">
                 <thead>
                   <tr className="bg-card2 text-subtext">
+                    {canEdit && (
+                      <th className="w-10 px-3 py-2">
+                        <input type="checkbox" aria-label="تحديد كل البنود المعروضة"
+                          checked={filtered.length > 0 && filtered.every(r => bulkSel.has(r.id))}
+                          onChange={e => setBulkSel(e.target.checked ? new Set(filtered.map(r => r.id)) : new Set())}
+                          className="size-4 cursor-pointer" />
+                      </th>
+                    )}
                     <th className="px-3 py-2 text-right font-semibold">الأمر</th>
                     <th className="px-3 py-2 text-right font-semibold">البند</th>
                     <th className="px-3 py-2 text-center font-semibold">الكمية</th>
@@ -303,6 +336,16 @@ export default function AssemblyMonitoringClient({
                   {filtered.map(r => (
                     <tr key={r.id} onClick={() => setSelectedId(r.id)}
                       className={cn("border-t border-border/40 cursor-pointer hover:bg-card2/50", r.openShortages > 0 && "bg-warning/5")}>
+                      {canEdit && (
+                        <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" aria-label={`تحديد ${r.woNumber} ${r.label}`}
+                            checked={bulkSel.has(r.id)}
+                            onChange={() => setBulkSel(prev => {
+                              const n = new Set(prev); n.has(r.id) ? n.delete(r.id) : n.add(r.id); return n;
+                            })}
+                            className="size-4 cursor-pointer" />
+                        </td>
+                      )}
                       <td className="px-3 py-2 font-mono font-semibold text-accent">{r.woNumber}</td>
                       <td className="px-3 py-2"><div className="text-text">{r.label} {r.description}</div>
                         {(r.client || r.project) && <div className="text-[10px] text-subtext truncate max-w-[220px]">{[r.client, r.project].filter(Boolean).join(" · ")}</div>}</td>
