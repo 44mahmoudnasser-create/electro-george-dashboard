@@ -140,6 +140,33 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
 
   const sortProps = { sortCol, sortDir, onSort: toggleSort };
 
+  // ترتيب بالقايمة (بدل أعمدة الجدول)
+  const SORTS = {
+    recent: { col: "created_date" as SortCol, dir: "desc" as const, label: "الأحدث" },
+    due: { col: "expected_delivery" as SortCol, dir: "asc" as const, label: "الأقرب تسليم" },
+    latest_due: { col: "expected_delivery" as SortCol, dir: "desc" as const, label: "الأبعد تسليم" },
+    number: { col: "wo_number" as SortCol, dir: "asc" as const, label: "رقم الأمر" },
+  };
+  const sortKey = (Object.keys(SORTS) as (keyof typeof SORTS)[]).find(k => SORTS[k].col === sortCol && SORTS[k].dir === sortDir) ?? "recent";
+  const applySort = (k: keyof typeof SORTS) => { setSortCol(SORTS[k].col); setSortDir(SORTS[k].dir); };
+
+  // بنود كل أمر (للتقدم)
+  const itemsByWo = useMemo(() => {
+    const m = new Map<number, { job_status: string }[]>();
+    initialItems.forEach(i => {
+      if (!m.has(i.wo_id)) m.set(i.wo_id, []);
+      m.get(i.wo_id)!.push({ job_status: i.job_status });
+    });
+    return m;
+  }, [initialItems]);
+
+  const summary = useMemo(() => ({
+    open: wos.filter(w => !DONE.includes(w.status)).length,
+    late: wos.filter(isLate).length,
+    inProgress: wos.filter(w => w.status === "جاري").length,
+    done: wos.filter(w => DONE.includes(w.status)).length,
+  }), [wos, todayStr]);
+
   const defaultInvoiceMonth = useMemo(() => {
     const ids = new Set(visible.map(w => w.id));
     const counts = new Map<string, number>();
@@ -163,113 +190,115 @@ export default function WorkOrdersClient({ initialWOs, initialItems, role, canCr
         icon={ClipboardList}
         subtitle={<span className="tabular-nums">{visible.length === wos.length ? `${wos.length} أمر` : `${visible.length} من ${wos.length} أمر`}</span>}
         actions={<>
-          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالرقم أو العميل أو الوصف" className="w-full sm:w-60" />
-          <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
-            aria-label="الأولوية" className="eg-select eg-input-sm w-36">
-            <option value="الكل">كل الأولويات</option>
-            {PRIORITIES.map(p => <option key={p}>{p}</option>)}
-          </select>
           <button onClick={() => setInvoiceOpen(true)} className="eg-btn-ghost eg-btn-sm" title="تحميل الأوامر بنفس قالب Excel">
-            <FileSpreadsheet className="size-3.5" />تحميل Excel
+            <FileSpreadsheet className="size-3.5" />Excel
           </button>
           <button onClick={() => window.print()} className="eg-btn-ghost eg-btn-sm" title="طباعة الأوامر المعروضة">
             <Printer className="size-3.5" />طباعة
           </button>
           {canCreate && (
             <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm">
-              <Plus className="size-3.5" />أمر شغل جديد
+              <Plus className="size-3.5" />أمر جديد
             </button>
           )}
         </>}
-      >
-        {/* فلتر الحالات بعدادات */}
-        <ChipRow>
-          <FilterChip active={filterStatus === "الكل"} onClick={() => setFilterStatus("الكل")} count={counts.all}>الكل</FilterChip>
-          {STATUSES.map(s => (
-            <FilterChip key={s} active={filterStatus === s} onClick={() => setFilterStatus(s)} count={counts[s] ?? 0}>{s}</FilterChip>
-          ))}
-          <FilterChip active={filterStatus === "متأخر"} onClick={() => setFilterStatus("متأخر")} count={counts.late} tone="danger">متأخر</FilterChip>
-          <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
-          <FilterChip active={hideDone} onClick={() => setHideDone(v => !v)}>
-            <EyeOff className="size-3.5" />إخفاء المنتهي
-          </FilterChip>
-        </ChipRow>
-      </PageHeader>
+      />
 
       <PageBody>
-        <div className="eg-card overflow-hidden !p-0">
-          {visible.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="eg-table min-w-[880px]">
-                <thead>
-                  <tr>
-                    <SortHeader col="wo_number" label="رقم الأمر" {...sortProps} />
-                    <SortHeader col="status" label="الحالة" {...sortProps} />
-                    <th>الأولوية</th>
-                    <th>شهر الخطة</th>
-                    <SortHeader col="created_date" label="الإنشاء" {...sortProps} />
-                    <SortHeader col="expected_delivery" label="التسليم المتوقع" {...sortProps} />
-                    <SortHeader col="completion_date" label="الإتمام" {...sortProps} />
-                    <th className="text-center">التحقق</th>
-                    <th className="w-10"><span className="sr-only">فتح</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map(w => {
-                    const late = isLate(w);
-                    const href = `${pathname}/${w.id}`;
-                    return (
-                      <tr key={w.id} onClick={() => router.push(href)} className="group cursor-pointer">
-                        <td className="max-w-[320px]">
-                          <Link href={href} onClick={e => e.stopPropagation()}
-                            className="font-mono text-[13px] font-semibold text-accent underline-offset-4 hover:underline">
-                            {w.wo_number}
-                          </Link>
-                          {(w.client_name || w.project_name) && (
-                            <div className="truncate text-[11px] text-subtext">{[w.client_name, w.project_name].filter(Boolean).join(" · ")}</div>
-                          )}
-                        </td>
-                        <td><Badge label={w.status} /></td>
-                        <td>{w.priority ? <Badge label={w.priority} dot={false} /> : <span className="text-muted">—</span>}</td>
-                        <td className="tabular-nums text-subtext">{w.plan_month ?? "—"}</td>
-                        <td className="tabular-nums text-subtext">{w.created_date ?? "—"}</td>
-                        <td className={cn("tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
-                          {w.expected_delivery ?? "—"}
-                          {late && <span className="mr-1.5 rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium">متأخر</span>}
-                        </td>
-                        <td className="tabular-nums text-subtext">{w.completion_date ?? "—"}</td>
-                        <td>
-                          <div className="flex items-center justify-center gap-1.5">
-                            {CHECKS.map(c => {
-                              const on = !!w[c.key];
-                              return (
-                                <span key={c.key} title={`${c.label}: ${on ? "تم" : "لسه"}`} aria-label={`${c.label}: ${on ? "تم" : "لسه"}`}
-                                  className={cn("size-2 rounded-full", on ? "bg-success" : "bg-border-strong")} />
-                              );
-                            })}
+        {/* الملخص: الأرقام الأهم بس، والمتأخر هو اللي بيبان */}
+        <dl className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <SummaryFigure label="مفتوح" value={summary.open} />
+          <SummaryFigure label="متأخر" value={summary.late} tone={summary.late ? "danger" : "muted"} emphasis />
+          <SummaryFigure label="جاري" value={summary.inProgress} tone="accent" />
+          <SummaryFigure label="مكتمل" value={summary.done} tone="success" />
+        </dl>
+
+        {/* أدوات البحث والترتيب والفلاتر */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالرقم أو العميل أو الوصف" className="w-full sm:w-64" />
+            <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
+              aria-label="الأولوية" className="eg-select eg-input-sm w-36">
+              <option value="الكل">كل الأولويات</option>
+              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            </select>
+            <select value={sortKey} onChange={e => applySort(e.target.value as keyof typeof SORTS)}
+              aria-label="الترتيب" className="eg-select eg-input-sm w-40">
+              {(Object.keys(SORTS) as (keyof typeof SORTS)[]).map(k => <option key={k} value={k}>{SORTS[k].label}</option>)}
+            </select>
+            <FilterChip active={hideDone} onClick={() => setHideDone(v => !v)}>
+              <EyeOff className="size-3.5" />إخفاء المنتهي
+            </FilterChip>
+          </div>
+          <ChipRow>
+            <FilterChip active={filterStatus === "الكل"} onClick={() => setFilterStatus("الكل")} count={counts.all}>الكل</FilterChip>
+            {STATUSES.map(s => (
+              <FilterChip key={s} active={filterStatus === s} onClick={() => setFilterStatus(s)} count={counts[s] ?? 0}>{s}</FilterChip>
+            ))}
+            <FilterChip active={filterStatus === "متأخر"} onClick={() => setFilterStatus("متأخر")} count={counts.late} tone="danger">متأخر</FilterChip>
+          </ChipRow>
+        </div>
+
+        {/* القايمة */}
+        {visible.length > 0 ? (
+          <ul className="eg-card divide-y divide-border/60 overflow-hidden !p-0">
+            {visible.map(w => {
+              const its = itemsByWo.get(w.id) ?? [];
+              const total = its.length;
+              const delivered = its.filter(i => i.job_status === "تم التسليم").length;
+              const pct = total ? Math.round((delivered / total) * 100) : 0;
+              const late = isLate(w);
+              const href = `${pathname}/${w.id}`;
+              const rail = late ? "bg-danger" : RAIL[w.status] ?? "bg-border-strong";
+              return (
+                <li key={w.id}>
+                  <Link href={href} className="group relative flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-card2/50">
+                    <span aria-hidden className={cn("absolute inset-y-0 start-0 w-[3px]", rail)} />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-mono text-sm font-semibold text-text">{w.wo_number}</span>
+                        <Badge label={w.status} />
+                        {w.priority && w.priority !== "متوسطة" && <Badge label={w.priority} dot={false} />}
+                      </div>
+                      <p className="truncate text-xs text-subtext">
+                        {[w.client_name, w.project_name].filter(Boolean).join(" · ") || "—"}
+                      </p>
+                      {total > 0 && (
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-1 w-40 overflow-hidden rounded-full bg-card2" aria-hidden>
+                            <div className={cn("h-full transition-[width] duration-500 ease-out", pct === 100 ? "bg-success" : "bg-accent")}
+                              style={{ width: `${pct}%` }} />
                           </div>
-                        </td>
-                        <td className="text-muted transition-colors group-hover:text-accent">
-                          <ChevronLeft className="size-4 transition-transform duration-150 group-hover:-translate-x-0.5" />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
+                          <span className="text-[11px] tabular-nums text-subtext">{delivered} من {total} بند اتسلم</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="hidden shrink-0 text-end sm:block">
+                      <p className={cn("text-xs tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
+                        {w.expected_delivery ?? "من غير موعد"}
+                      </p>
+                      {late && <p className="text-[11px] font-medium text-danger">متأخر</p>}
+                      {w.plan_month && <p className="mt-0.5 text-[11px] tabular-nums text-muted">خطة {w.plan_month}</p>}
+                    </div>
+                    <ChevronLeft className="size-4 shrink-0 text-muted transition-transform duration-150 group-hover:-translate-x-0.5 group-hover:text-text" />
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div className="eg-card">
             <EmptyState
-              message={wos.length ? "لا توجد أوامر شغل مطابقة للفلتر" : "لسه مفيش أوامر شغل"}
+              message={wos.length ? "مفيش أوامر بالفلتر ده" : "لسه مفيش أوامر شغل"}
               description={wos.length ? "غيّر الفلاتر أو امسح البحث علشان تشوف باقي الأوامر." : canCreate ? "ابدأ بإضافة أول أمر شغل." : undefined}
               action={wos.length && filtersActive
-                ? <button onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">مسح الفلاتر</button>
+                ? <button onClick={clearFilters} className="eg-btn-ghost eg-btn-sm">امسح الفلاتر</button>
                 : !wos.length && canCreate
-                  ? <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm"><Plus className="size-3.5" />أمر شغل جديد</button>
+                  ? <button onClick={() => setAddOpen(true)} className="eg-btn-primary eg-btn-sm"><Plus className="size-3.5" />أمر جديد</button>
                   : undefined}
             />
-          )}
-        </div>
+          </div>
+        )}
       </PageBody>
 
       {/* مودال الإضافة */}
@@ -369,5 +398,29 @@ function SortHeader({ col, label, sortCol, sortDir, onSort, className }: {
         <Icon className={cn("size-3", active ? "text-accent" : "opacity-40")} />
       </button>
     </th>
+  );
+}
+
+// ألوان شريط الجنب لكل حالة (المتأخر بيتحط فوق)
+const RAIL: Record<string, string> = {
+  "لم يبدأ": "bg-border-strong",
+  "جاري": "bg-accent",
+  "متوقف": "bg-warning",
+  "مكتمل": "bg-success",
+  "تم التسليم": "bg-success/40",
+};
+
+// رقم في الملخص فوق القايمة
+function SummaryFigure({ label, value, tone = "default", emphasis = false }: {
+  label: string; value: number; tone?: "default" | "muted" | "accent" | "success" | "danger"; emphasis?: boolean;
+}) {
+  const T: Record<string, string> = {
+    default: "text-text", muted: "text-subtext", accent: "text-accent", success: "text-success", danger: "text-danger",
+  };
+  return (
+    <div>
+      <dt className="text-xs text-subtext">{label}</dt>
+      <dd className={cn("font-bold leading-none tabular-nums", emphasis ? "text-3xl" : "text-2xl", T[tone])}>{value}</dd>
+    </div>
   );
 }
