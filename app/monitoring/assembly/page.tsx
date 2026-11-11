@@ -26,8 +26,8 @@ export default async function AssemblyMonitoringPage() {
       .select("id, work_order_item_id, description, qty, qty_dispensed, unit")
       .not("work_order_item_id", "is", null),
     supabase.from("assembly_shortages").select("*").order("created_at", { ascending: false }),
-    supabase.from("assembly_groups").select("id, name, supervisor_id, active").order("name"),
-    supabase.from("assembly_group_members").select("group_id, tech_id, technician:technicians(id, name, grade)"),
+    supabase.from("department_groups").select("id, name, supervisor_id, active").eq("department", "MECH_ASSEMBLY").order("name"),
+    supabase.from("department_group_members").select("group_id, tech_id, technician:technicians(id, name, grade)"),
     supabase.from("item_assembly").select("*"),
     supabase.from("wo_department_status").select("item_id, status, updated_at").eq("department", "MECH_ASSEMBLY"),
     supabase.from("wo_status_history")
