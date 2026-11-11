@@ -30,7 +30,7 @@ export default async function DashboardPage() {
     .order("date", { ascending: false });
   if (!isManager) violationsQuery = violationsQuery.eq("technician.department", department);
 
-  const [{ data: items }, { data: attendance }, { data: purchaseItems }, { data: violations }] = await Promise.all([
+  const [{ data: items }, { data: attendance }, { data: purchaseItems }, { data: violations }, { data: deptRows }] = await Promise.all([
     supabase.from("work_order_items")
       .select("id, wo_id, item_no, description, qty, job_status, priority, expected_delivery, plan_month, work_order:work_orders(wo_number, client_name, project_name)")
       .order("expected_delivery", { ascending: true, nullsFirst: false }),
@@ -41,6 +41,8 @@ export default async function DashboardPage() {
       .order("id", { ascending: false })
       .limit(300),
     violationsQuery,
+    // حالة كل قسم تصنيع لكل بند (للمراحل)
+    supabase.from("wo_department_status").select("item_id, department, status"),
   ]);
 
   return (
@@ -49,6 +51,7 @@ export default async function DashboardPage() {
         items={(items ?? []) as any[]}
         attendance={(attendance ?? []) as any[]}
         purchaseItems={(purchaseItems ?? []) as any[]}
+        deptRows={(deptRows ?? []) as any[]}
         violationsThisMonth={violations?.length ?? 0}
         today={today}
         thisMonth={thisMonth}
