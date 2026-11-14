@@ -841,7 +841,7 @@ export default function AttendanceClient({
             </Field>
           </div>
           <p className="text-[11px] text-subtext">
-            كل بند = عدد اللي اشتغلوا عليه × 8 ساعات، والإذن بيتخصم، والعمل الإضافي 3 ساعات لكل شخص.
+            كل بند = عدد اللي اشتغلوا عليه × 8 ساعات، والإذن بيتخصم، والعمل الإضافي 4 ساعات لكل شخص.
           </p>
           <button type="button" onClick={exportWeeklyCard} disabled={cardBusy} className="eg-btn-primary w-full justify-center">
             {cardBusy ? <Spinner className="size-3.5" /> : <Printer className="size-3.5" />}

@@ -27,7 +27,9 @@ export async function GET(request: Request) {
 
   const { date, hour } = cairoNow();
   const force = new URL(request.url).searchParams.get("force") === "1";
-  if (hour !== 16 && !force) {
+  // الكرون مرة واحدة 14:00 UTC = 4 العصر في الشتا و5 في الصيف (التوقيت الصيفي)، فبنقبل الساعتين للكرون بتاع Vercel بس
+  const fromVercelCron = (request.headers.get("user-agent") ?? "").startsWith("vercel-cron");
+  if (hour !== 16 && !(fromVercelCron && hour === 17) && !force) {
     return NextResponse.json({ skipped: true, reason: `Cairo hour is ${hour}` });
   }
 

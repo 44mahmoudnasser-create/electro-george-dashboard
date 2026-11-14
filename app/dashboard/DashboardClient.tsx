@@ -180,7 +180,15 @@ export default function DashboardClient({
     return c;
   }, [base]);
 
-  const planTotal = STATUSES.reduce((sum, s) => sum + (statusCounts[s] ?? 0), 0);
+  // كارت الخطة بيعد بنود الخطة بس، حتى لو الجدول متحول على "الكل"
+  const planCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    STATUSES.forEach(s => (c[s] = 0));
+    planned.forEach(r => { c[r.status] = (c[r.status] ?? 0) + 1; });
+    return c;
+  }, [planned]);
+
+  const planTotal = STATUSES.reduce((sum, s) => sum + (planCounts[s] ?? 0), 0);
 
   const overallLate = useMemo(() => rows.filter(isLate).length, [rows, today]);
 
@@ -322,11 +330,11 @@ export default function DashboardClient({
               {planTotal > 0 ? (
                 <div
                   role="img"
-                  aria-label={STATUSES.map(s => `${s} ${statusCounts[s] ?? 0}`).join("، ")}
+                  aria-label={STATUSES.map(s => `${s} ${planCounts[s] ?? 0}`).join("، ")}
                   className="mt-5 flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-card2"
                 >
                   {STATUSES.map(s => {
-                    const n = statusCounts[s] ?? 0;
+                    const n = planCounts[s] ?? 0;
                     if (!n) return null;
                     return (
                       <span key={s} title={`${s}: ${n}`}
@@ -339,7 +347,7 @@ export default function DashboardClient({
 
               <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5">
                 {STATUSES.map(st => {
-                  const n = statusCounts[st] ?? 0;
+                  const n = planCounts[st] ?? 0;
                   const active = scope === "plan" && statusFilter === st;
                   return (
                     <li key={st}>

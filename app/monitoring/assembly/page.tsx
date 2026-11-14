@@ -26,7 +26,7 @@ export default async function AssemblyMonitoringPage() {
       .select("id, work_order_item_id, description, qty, qty_dispensed, unit")
       .not("work_order_item_id", "is", null),
     supabase.from("assembly_shortages").select("*").order("created_at", { ascending: false }),
-    supabase.from("department_groups").select("id, name, supervisor_id, active").eq("department", "MECH_ASSEMBLY").order("name"),
+    supabase.from("department_groups").select("id, name, department, supervisor_id").order("name"),
     supabase.from("department_group_members").select("group_id, tech_id, technician:technicians(id, name, grade)"),
     supabase.from("item_assembly").select("*"),
     supabase.from("wo_department_status").select("item_id, status, updated_at").eq("department", "MECH_ASSEMBLY"),
@@ -45,6 +45,14 @@ export default async function AssemblyMonitoringPage() {
     (d.aliases ?? []).some((a: string) => a.trim().toLowerCase() === raw))?.code ?? null;
   const canEdit = role === "manager" || myCode === "MECH_ASSEMBLY";
 
+  // مجموعات التجميع الميكانيكي: قسم المجموعة متخزن بنفس قيمة قسم الفنيين (ممكن تكون alias زي "assembly")
+  const mechAliases = new Set(
+    ((deptRows ?? []).find((d: any) => d.code === "MECH_ASSEMBLY")?.aliases ?? ["MECH_ASSEMBLY"])
+      .map((a: string) => a.trim().toLowerCase())
+  );
+  const mechGroups = (groups ?? []).filter((g: any) => mechAliases.has((g.department ?? "").trim().toLowerCase()));
+  const mechGroupIds = new Set(mechGroups.map((g: any) => g.id));
+
   return (
     <AppShell role={role}>
       <AssemblyMonitoringClient
@@ -52,8 +60,8 @@ export default async function AssemblyMonitoringPage() {
         prod={(prod ?? []) as any[]}
         boms={(boms ?? []) as any[]}
         shortages={(shortages ?? []) as any[]}
-        groups={(groups ?? []) as any[]}
-        members={(members ?? []) as any[]}
+        groups={mechGroups as any[]}
+        members={(members ?? []).filter((m: any) => mechGroupIds.has(m.group_id)) as any[]}
         itemAssembly={(itemAssembly ?? []) as any[]}
         mechStatus={(mechStatus ?? []) as any[]}
         history={(history ?? []) as any[]}
