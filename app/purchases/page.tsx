@@ -9,8 +9,9 @@ export default async function PurchasesPage() {
   const supabase = createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
-  const { data: appUser } = await supabase.from("app_users").select("role").eq("id", user.id).single();
+  const { data: appUser } = await supabase.from("app_users").select("role, department").eq("id", user.id).single();
   const role = appUser?.role ?? "secretary";
+  const department = appUser?.department ?? null;
   const [{ data: orders }, { data: wos }] = await Promise.all([
     supabase
       .from("purchase_orders")
@@ -20,7 +21,7 @@ export default async function PurchasesPage() {
   ]);
   return (
     <AppShell role={role}>
-      <PurchasesClient initialOrders={orders ?? []} wos={wos ?? []} role={role} />
+      <PurchasesClient initialOrders={orders ?? []} wos={wos ?? []} role={role} department={department} />
     </AppShell>
   );
 }

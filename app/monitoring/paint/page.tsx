@@ -36,6 +36,7 @@ export default async function PaintMonitoringPage() {
       <PaintMonitoringClient
         initialItems={items as any}
         initialPaintTypes={paintTypes ?? []}
+        canManageTypes={isManager}
       />
     </AppShell>
   );

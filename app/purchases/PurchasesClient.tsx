@@ -22,6 +22,10 @@ import {
 const CATEGORIES = ["عدد", "كيلو", "متر", "علبة"] as const;
 type Category = typeof CATEGORIES[number];
 const STATUSES = ["مفتوح", "تم التوريد", "ملغي"] as const;
+// حالات أمر الشراء (الهيدر) — 4 حالات
+const ORDER_STATUSES = ["جديد", "مفتوح", "تم التوريد", "تم التوريد جزئيا"] as const;
+// الأمر "تم التوريد جزئيا" بيقفل التعديل على السكرتير (نفس قفل الداتابيز في 031)
+const PARTIAL_STATUS = "تم التوريد جزئيا";
 
 interface PurchaseItem {
   id: number;
@@ -39,6 +43,8 @@ interface PurchaseOrder {
   wo_id: number | null;
   request_date: string;
   image_path: string | null;
+  status: string;
+  department?: string | null;
   work_order?: { wo_number: string } | null;
   purchase_items: PurchaseItem[];
 }
@@ -54,8 +60,8 @@ const emptyItemForm = (): ItemForm => ({
   item_name: "", category: "عدد", quantity: "1", supply_date: "", status: "مفتوح",
 });
 
-type OrderForm = { order_no: string; wo_id: string; image: File | null };
-const emptyOrderForm = (): OrderForm => ({ order_no: "", wo_id: "", image: null });
+type OrderForm = { order_no: string; wo_id: string; status: string; image: File | null };
+const emptyOrderForm = (): OrderForm => ({ order_no: "", wo_id: "", status: "جديد", image: null });
 
 type WOOption = Pick<WorkOrder, "id" | "wo_number">;
 
@@ -69,8 +75,8 @@ const getImageUrl = (path?: string | null) => {
 const orderLabel = (o: Pick<PurchaseOrder, "order_no">) => (o.order_no ? `#${o.order_no}` : "بدون رقم");
 
 export default function PurchasesClient({
-  initialOrders, wos, role,
-}: { initialOrders: PurchaseOrder[]; wos: WOOption[]; role: string }) {
+  initialOrders, wos, role, department,
+}: { initialOrders: PurchaseOrder[]; wos: WOOption[]; role: string; department: string | null }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [orders, setOrders] = useState<PurchaseOrder[]>(initialOrders);
@@ -78,6 +84,9 @@ export default function PurchasesClient({
   const [selItems, setSelItems] = useState<Set<number>>(new Set());
   const todayStr = today();
   const isAdmin = role === "admin";
+  const isSecretary = role === "secretary";
+  // الأدمن يعدّل أي أمر. السكرتير يعدّل الأمر وبنوده إلا لو الأمر "تم التوريد جزئيا"
+  const canEditOrder = (o: PurchaseOrder) => isAdmin || (isSecretary && o.status !== PARTIAL_STATUS);
 
   // ---------- مودال: أمر شراء جديد (ببنوده + صورته) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
@@ -134,6 +143,8 @@ export default function PurchasesClient({
         order_no: newOrder.order_no.trim() || null,
         wo_id: newOrder.wo_id ? parseInt(newOrder.wo_id) : null,
         request_date: todayStr,
+        status: newOrder.status,
+        department: department || null,
       })
       .select("*, work_order:work_orders(wo_number)")
       .single();
@@ -168,7 +179,7 @@ export default function PurchasesClient({
   // ---------------------------------------------------------------------
   const openEditOrder = (order: PurchaseOrder) => {
     setEditOrder(order);
-    setEditOrderForm({ order_no: order.order_no ?? "", wo_id: order.wo_id ? String(order.wo_id) : "", image: null });
+    setEditOrderForm({ order_no: order.order_no ?? "", wo_id: order.wo_id ? String(order.wo_id) : "", status: order.status, image: null });
   };
 
   const submitEditOrder = async (e?: React.FormEvent) => {
@@ -178,6 +189,7 @@ export default function PurchasesClient({
     const payload = {
       order_no: editOrderForm.order_no.trim() || null,
       wo_id: editOrderForm.wo_id ? parseInt(editOrderForm.wo_id) : null,
+      status: editOrderForm.status,
     };
     const { error } = await supabase.from("purchase_orders").update(payload).eq("id", editOrder.id);
     if (error) { toast.error(error.message); setSaving(false); return; }
@@ -364,6 +376,7 @@ export default function PurchasesClient({
                         طلب بتاريخ <span className="tabular-nums">{order.request_date}</span>
                       </span>
                       <Badge label={`${count} بند`} tone="neutral" dot={false} className="tabular-nums" />
+                      <Badge label={order.status} tone="neutral" dot={false} />
                       {imageUrl && (
                         <a href={imageUrl} target="_blank" rel="noopener"
                           onClick={e => e.stopPropagation()}
@@ -373,11 +386,13 @@ export default function PurchasesClient({
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      <button type="button" onClick={e => { e.preventDefault(); openAddItem(order.id); }}
-                        className="eg-btn-ghost eg-btn-xs">
-                        <Plus className="size-3" />إضافة بند
-                      </button>
-                      {isAdmin && (
+                      {canEditOrder(order) && (
+                        <button type="button" onClick={e => { e.preventDefault(); openAddItem(order.id); }}
+                          className="eg-btn-ghost eg-btn-xs">
+                          <Plus className="size-3" />إضافة بند
+                        </button>
+                      )}
+                      {canEditOrder(order) && (
                         <>
                           <Tooltip content="تعديل الأمر">
                             <button type="button" aria-label="تعديل أمر الشراء"
@@ -386,13 +401,15 @@ export default function PurchasesClient({
                               <Pencil className="size-3.5" />
                             </button>
                           </Tooltip>
-                          <Tooltip content="حذف الأمر">
-                            <button type="button" aria-label="حذف أمر الشراء"
-                              onClick={e => { e.preventDefault(); removeOrder(order); }}
-                              className="eg-icon-btn-danger">
-                              <Trash2 className="size-3.5" />
-                            </button>
-                          </Tooltip>
+                          {isAdmin && (
+                            <Tooltip content="حذف الأمر">
+                              <button type="button" aria-label="حذف أمر الشراء"
+                                onClick={e => { e.preventDefault(); removeOrder(order); }}
+                                className="eg-icon-btn-danger">
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            </Tooltip>
+                          )}
                         </>
                       )}
                     </div>
@@ -423,7 +440,7 @@ export default function PurchasesClient({
                             <th className="w-24">الفئة</th>
                             <th className="w-44">تاريخ التوريد</th>
                             <th className="w-28">الحالة</th>
-                            {isAdmin && <th className="w-20"><span className="sr-only">إجراءات</span></th>}
+                            {canEditOrder(order) && <th className="w-20"><span className="sr-only">إجراءات</span></th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -451,10 +468,10 @@ export default function PurchasesClient({
                                   {late && <span className="mr-1.5 rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium">متأخر</span>}
                                 </td>
                                 <td><Badge label={item.status} /></td>
-                                {isAdmin && (
+                                {canEditOrder(order) && (
                                   <td>
                                     <div className="flex items-center justify-end gap-0.5">
-                                      {item.status === "مفتوح" && (
+                                      {isAdmin && item.status === "مفتوح" && (
                                         <Tooltip content="تسجيل التوريد">
                                           <button type="button" onClick={() => markSupplied(order.id, [item])}
                                             className="eg-icon-btn" aria-label="تسجيل توريد البند">
@@ -468,12 +485,14 @@ export default function PurchasesClient({
                                           <Pencil className="size-3.5" />
                                         </button>
                                       </Tooltip>
-                                      <Tooltip content="حذف">
-                                        <button type="button" onClick={() => removeItem(order.id, item)}
-                                          className="eg-icon-btn-danger" aria-label="حذف البند">
-                                          <Trash2 className="size-3.5" />
-                                        </button>
-                                      </Tooltip>
+                                      {isAdmin && (
+                                        <Tooltip content="حذف">
+                                          <button type="button" onClick={() => removeItem(order.id, item)}
+                                            className="eg-icon-btn-danger" aria-label="حذف البند">
+                                            <Trash2 className="size-3.5" />
+                                          </button>
+                                        </Tooltip>
+                                      )}
                                     </div>
                                   </td>
                                 )}
@@ -488,11 +507,11 @@ export default function PurchasesClient({
                       compact
                       icon={Package}
                       message="لا توجد بنود بعد"
-                      action={
+                      action={canEditOrder(order) ? (
                         <button type="button" onClick={() => openAddItem(order.id)} className="eg-btn-ghost eg-btn-xs">
                           <Plus className="size-3" />إضافة بند
                         </button>
-                      }
+                      ) : undefined}
                     />
                   )}
                 </details>
@@ -633,6 +652,11 @@ function OrderFields({ value, onChange, wos, currentImageUrl, autoFocus }: {
           <select value={value.wo_id} onChange={e => onChange({ wo_id: e.target.value })} className="eg-select">
             <option value="">— بدون أمر شغل —</option>
             {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
+          </select>
+        </Field>
+        <Field label="حالة أمر الشراء">
+          <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
+            {ORDER_STATUSES.map(s => <option key={s}>{s}</option>)}
           </select>
         </Field>
       </div>

@@ -49,8 +49,8 @@ const isLate = (it: Item) => {
 /* ═══════════════════════ الكومبوننت ═══════════════════════ */
 
 export default function PaintMonitoringClient({
-  initialItems, initialPaintTypes,
-}: { initialItems: Item[]; initialPaintTypes: PaintType[] }) {
+  initialItems, initialPaintTypes, canManageTypes,
+}: { initialItems: Item[]; initialPaintTypes: PaintType[]; canManageTypes: boolean }) {
   const toast = useToast();
   const [items, setItems] = useState(initialItems);
   const [paintTypes, setPaintTypes] = useState(initialPaintTypes);
@@ -254,7 +254,7 @@ export default function PaintMonitoringClient({
   const visibleReady = visible.reduce((a, it) => a + avail(it), 0);
   const typeSingle = typeTargets && typeTargets.length === 1 ? items.find(it => it.id === typeTargets[0]) : undefined;
 
-  const emptyAction = paintTypes.length === 0
+  const emptyAction = paintTypes.length === 0 && canManageTypes
     ? (
       <button type="button" onClick={() => setTypesOpen(true)} className="eg-btn-primary eg-btn-sm">
         <Settings className="size-3.5" />أنواع الدهان
@@ -277,11 +277,11 @@ export default function PaintMonitoringClient({
         icon={Paintbrush}
         meta={<LiveBadge live={live} hint={live ? "متصل — التحديث لحظي" : "غير متصل"} />}
         subtitle="الأجزاء اللي اتستلمت من الصاج ومحتاجة دهان، مرتبة حسب نوع الدهان"
-        actions={
+        actions={canManageTypes ? (
           <button type="button" onClick={() => setTypesOpen(true)} className="eg-btn-ghost eg-btn-sm">
             <Settings className="size-3.5" />أنواع الدهان
           </button>
-        }
+        ) : undefined}
       />
 
       <PageBody>
@@ -412,7 +412,7 @@ export default function PaintMonitoringClient({
                                 <button type="button" onClick={() => openLog(it)} disabled={a <= 0} className="eg-btn-primary eg-btn-xs">
                                   تسجيل دهان
                                 </button>
-                                {(it.qty_paint ?? 0) === 0 && (
+                                {canManageTypes && (it.qty_paint ?? 0) === 0 && (
                                   <Tooltip content="تغيير نوع الدهان">
                                     <button type="button" onClick={() => openType([it.id])} aria-label="تغيير نوع الدهان" className="eg-icon-btn">
                                       <Paintbrush className="size-3.5" />
@@ -431,7 +431,7 @@ export default function PaintMonitoringClient({
             </div>
           ) : (
             <EmptyState
-              message={paintTypes.length === 0
+              message={paintTypes.length === 0 && canManageTypes
                 ? "ابدأ بإضافة أنواع الدهان من زرار «أنواع الدهان»"
                 : "مفيش أجزاء جاهزة للدهان دلوقتي"}
               action={emptyAction}
@@ -446,9 +446,11 @@ export default function PaintMonitoringClient({
               تم تحديد <span className="font-bold tabular-nums">{selected.size}</span> بند
             </span>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => openType(Array.from(selected))} className="eg-btn-primary eg-btn-sm">
-                <Paintbrush className="size-3.5" />تحديد نوع الدهان
-              </button>
+              {canManageTypes && (
+                <button type="button" onClick={() => openType(Array.from(selected))} className="eg-btn-primary eg-btn-sm">
+                  <Paintbrush className="size-3.5" />تحديد نوع الدهان
+                </button>
+              )}
               <button type="button" onClick={() => setSelected(new Set())} className="eg-btn-ghost eg-btn-sm">إلغاء التحديد</button>
             </div>
           </div>
