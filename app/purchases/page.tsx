@@ -21,7 +21,7 @@ export default async function PurchasesPage() {
   ]);
   return (
     <AppShell role={role}>
-      <PurchasesClient initialOrders={orders ?? []} wos={wos ?? []} role={role} department={department} />
+      <PurchasesClient initialOrders={orders ?? []} wos={wos ?? []} role={role} department={department} userId={user.id} />
     </AppShell>
   );
 }

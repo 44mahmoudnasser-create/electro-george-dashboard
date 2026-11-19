@@ -54,6 +54,7 @@ interface PurchaseOrder {
   request_date: string;
   status: string;
   department?: string | null;
+  created_by?: string | null;
   work_order?: { wo_number: string } | null;
   images: OrderImage[];
   purchase_items: PurchaseItem[];
@@ -85,8 +86,8 @@ const getImageUrl = (path?: string | null) => {
 const orderLabel = (o: Pick<PurchaseOrder, "order_no">) => (o.order_no ? `#${o.order_no}` : "بدون رقم");
 
 export default function PurchasesClient({
-  initialOrders, wos, role, department,
-}: { initialOrders: PurchaseOrder[]; wos: WOOption[]; role: string; department: string | null }) {
+  initialOrders, wos, role, department, userId,
+}: { initialOrders: PurchaseOrder[]; wos: WOOption[]; role: string; department: string | null; userId: string }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [orders, setOrders] = useState<PurchaseOrder[]>(initialOrders);
@@ -102,6 +103,11 @@ export default function PurchasesClient({
   const canReceive = isManager || isPurchaseDept;
   // أي تعديل على أمر أو بند (إضافة / تعديل / حذف / صور): المدير بس
   const canEditOrder = (_o: PurchaseOrder) => isManager;
+  // السكرتير يقدر ينشئ أمر جديد في قسمه، ويضيف بنود/صور لأمره هو طالما لسه "جديد"
+  const isSecretary = role === "secretary";
+  const canCreateOrder = isManager || isSecretary;
+  const canAddItem = (o: PurchaseOrder) =>
+    isManager || (isSecretary && o.status === "جديد" && o.created_by === userId);
 
   // ---------- مودال: أمر شراء جديد (ببنوده + صوره) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
@@ -417,7 +423,7 @@ export default function PurchasesClient({
   const receiveOrder = receiveOrderId !== null ? orders.find(o => o.id === receiveOrderId) : undefined;
 
   // قسم الشراء مايضيفش أوامر جديدة، بيسجل التوريد بس
-  const newOrderButton = !isManager ? undefined : (
+  const newOrderButton = !canCreateOrder ? undefined : (
     <button type="button" onClick={() => setAddOrderOpen(true)} className="eg-btn-primary eg-btn-sm">
       <Plus className="size-3.5" />أمر شراء جديد
     </button>
@@ -472,7 +478,7 @@ export default function PurchasesClient({
                       ))}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      {canEditOrder(order) && (
+                      {canAddItem(order) && (
                         <button type="button" onClick={e => { e.preventDefault(); openAddItem(order.id); }}
                           className="eg-btn-ghost eg-btn-xs">
                           <Plus className="size-3" />إضافة بند
@@ -597,7 +603,7 @@ export default function PurchasesClient({
                       compact
                       icon={Package}
                       message="لا توجد بنود بعد"
-                      action={canEditOrder(order) ? (
+                      action={canAddItem(order) ? (
                         <button type="button" onClick={() => openAddItem(order.id)} className="eg-btn-ghost eg-btn-xs">
                           <Plus className="size-3" />إضافة بند
                         </button>
