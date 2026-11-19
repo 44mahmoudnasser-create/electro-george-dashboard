@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import nodemailer from "nodemailer";
 
-// إيميل بيتبعت لما يتضاف أمر شراء جديد: للمدير + قسم supmanager + اللي أنشأ الأمر
+// إيميل بيتبعت لما يتضاف أمر شراء جديد: للمدير + قسم supmanager بس
 const NOTIFY_DEPT = "supmanager";
 
 const esc = (s: string) =>
@@ -40,10 +40,10 @@ export async function POST(request: Request) {
     .from("app_users")
     .select("id, email, notify_email, role, department, full_name");
 
+  // بس المدير وقسم supmanager — مش اللي أنشأ الأمر
   const recipients = (users ?? []).filter(u =>
     u.role === "manager" ||
-    (u.department ?? "").toLowerCase() === NOTIFY_DEPT ||
-    (order.created_by && u.id === order.created_by)
+    (u.department ?? "").toLowerCase() === NOTIFY_DEPT
   );
   const emails = unique(recipients.map(u => (u.notify_email || u.email) as string).filter(Boolean));
   if (emails.length === 0) return NextResponse.json({ email: 0 });
