@@ -95,16 +95,13 @@ export default function PurchasesClient({
   const todayStr = today();
 
   // ---------- الصلاحيات ----------
-  const isAdmin = role === "admin";
-  const isSecretary = role === "secretary";
-  // قسم الشراء: يسجل التوريد بس، مايعدّلش الأوامر ولا البنود
+  const isManager = role === "manager";
+  // قسم الشراء: يسجل التوريد بس
   const isPurchaseDept = (department ?? "").toLowerCase() === "purchase";
-  // الأدمن الكامل (مش قسم الشراء)
-  const isFullAdmin = isAdmin && !isPurchaseDept;
-  // التوريد (الكامل أو الجزئي) للأدمن وقسم الشراء
-  const canReceive = isAdmin || isPurchaseDept;
-  // الأدمن يعدّل أي أمر. السكرتير يعدّل الأمر وبنوده إلا لو الأمر "تم التوريد جزئيا"
-  const canEditOrder = (o: PurchaseOrder) => isFullAdmin || (isSecretary && o.status !== PARTIAL_STATUS);
+  // التوريد (كامل أو جزئي): المدير وقسم الشراء بس
+  const canReceive = isManager || isPurchaseDept;
+  // أي تعديل على أمر أو بند (إضافة / تعديل / حذف / صور): المدير بس
+  const canEditOrder = (_o: PurchaseOrder) => isManager;
 
   // ---------- مودال: أمر شراء جديد (ببنوده + صوره) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
@@ -420,7 +417,7 @@ export default function PurchasesClient({
   const receiveOrder = receiveOrderId !== null ? orders.find(o => o.id === receiveOrderId) : undefined;
 
   // قسم الشراء مايضيفش أوامر جديدة، بيسجل التوريد بس
-  const newOrderButton = isPurchaseDept ? undefined : (
+  const newOrderButton = !isManager ? undefined : (
     <button type="button" onClick={() => setAddOrderOpen(true)} className="eg-btn-primary eg-btn-sm">
       <Plus className="size-3.5" />أمر شراء جديد
     </button>
@@ -490,7 +487,7 @@ export default function PurchasesClient({
                           </button>
                         </Tooltip>
                       )}
-                      {isFullAdmin && (
+                      {isManager && (
                         <Tooltip content="حذف الأمر">
                           <button type="button" aria-label="حذف أمر الشراء"
                             onClick={e => { e.preventDefault(); removeOrder(order); }}
@@ -578,7 +575,7 @@ export default function PurchasesClient({
                                           </button>
                                         </Tooltip>
                                       )}
-                                      {isFullAdmin && (
+                                      {isManager && (
                                         <Tooltip content="حذف">
                                           <button type="button" onClick={() => removeItem(order.id, item)}
                                             className="eg-icon-btn-danger" aria-label="حذف البند">
