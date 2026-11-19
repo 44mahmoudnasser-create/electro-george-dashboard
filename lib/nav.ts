@@ -43,10 +43,10 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 // قسم الشراء (department = purchase) بيشوف صفحة طلبات الشراء بس، بغض النظر عن الدور
-export const PURCHASE_DEPT = "purchase";
+export const PURCHASE_TEAM_DEPTS = ["purchase", "supmanager"];
 
 export function navForRole(role: string | null | undefined, department?: string | null): NavItem[] {
-  if ((department ?? "").toLowerCase() === PURCHASE_DEPT) return NAV_ITEMS.filter(n => n.href === "/purchases");
+  if (PURCHASE_TEAM_DEPTS.includes((department ?? "").toLowerCase())) return NAV_ITEMS.filter(n => n.href === "/purchases");
   if (role === "secretary") return NAV_ITEMS.filter(n => n.secretaryVisible);
   return NAV_ITEMS;
 }

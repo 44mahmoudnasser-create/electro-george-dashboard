@@ -12,8 +12,9 @@ import Tooltip from "@/components/ui/Tooltip";
 import { Page, PageHeader, PageBody } from "@/components/ui/Page";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { PURCHASE_TEAM_DEPTS } from "@/lib/nav";
 import {
-  Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown, ShoppingCart, Save, ExternalLink, Package, PackageCheck,
+  Plus, Pencil, Trash2, Image as ImageIcon, ChevronDown, ShoppingCart, Save, ExternalLink, Package, PackageCheck, CalendarDays,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------
@@ -98,7 +99,7 @@ export default function PurchasesClient({
   // ---------- الصلاحيات ----------
   const isManager = role === "manager";
   // قسم الشراء: يسجل التوريد بس
-  const isPurchaseDept = (department ?? "").toLowerCase() === "purchase";
+  const isPurchaseDept = PURCHASE_TEAM_DEPTS.includes((department ?? "").toLowerCase());
   // التوريد (كامل أو جزئي): المدير وقسم الشراء بس
   const canReceive = isManager || isPurchaseDept;
   // أي تعديل على أمر أو بند (إضافة / تعديل / حذف / صور): المدير بس
@@ -132,6 +133,10 @@ export default function PurchasesClient({
   const [receiveOrderId, setReceiveOrderId] = useState<number | null>(null);
   const [receiveItems, setReceiveItems] = useState<PurchaseItem[]>([]);
   const [receiveQty, setReceiveQty] = useState<Record<number, string>>({});
+
+  // ---------- مودال: التاريخ المتوقع لبند (فريق الشراء والمدير) ----------
+  const [expItem, setExpItem] = useState<{ orderId: number; item: PurchaseItem } | null>(null);
+  const [expDate, setExpDate] = useState("");
 
   // بيرجع الصورة بعد ما تترفع وتتسجل في الجدول، وإلا null (والخطأ بيظهر كإشعار)
   const uploadOrderImage = async (file: File, orderId: number): Promise<OrderImage | null> => {
@@ -200,12 +205,21 @@ export default function PurchasesClient({
       .from("purchase_items").insert(rowsToInsert).select("*");
     if (itemsErr) { toast.error(itemsErr.message); setSaving(false); return; }
 
+    const savedItems = (insertedItems ?? []) as PurchaseItem[];
+    const hasDates = savedItems.some(it => it.expected_supply_date);
     setOrders(prev => [{
       ...order,
+      status: hasDates && order.status === "جديد" ? "مفتوح" : order.status,
       images,
-      purchase_items: insertedItems as PurchaseItem[],
+      purchase_items: savedItems,
     }, ...prev]);
     setAddOrderOpen(false); resetNewOrder(); setSaving(false);
+    // إيميل للمدير وقسم supmanager واللي أنشأ الأمر (بيحصل في الخلفية)
+    fetch("/api/purchases/notify-new-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId: order.id }),
+    }).catch(() => {});
     if (images.length < newOrder.images.length) toast.error("الأمر اتحفظ بس بعض الصور ماتحفظتش، ضيفها من تعديل الأمر");
     else toast.success("تم حفظ أمر الشراء");
   };
@@ -375,6 +389,7 @@ export default function PurchasesClient({
     const byId = new Map(rows.map(r => [r.item.id, r]));
     setOrders(prev => prev.map(o => o.id === receiveOrderId ? {
       ...o,
+      status: o.status === "جديد" ? "مفتوح" : o.status,
       purchase_items: o.purchase_items.map(it => {
         const r = byId.get(it.id);
         return r ? { ...it, received_qty: r.total, status: r.status, supply_date: todayStr } : it;
@@ -383,6 +398,32 @@ export default function PurchasesClient({
     setSelItems(prev => { const n = new Set(prev); rows.forEach(r => n.delete(r.item.id)); return n; });
     closeReceive(); setSaving(false);
     toast.success(`تم تسجيل توريد ${rows.length} بند`);
+  };
+
+  // ---------------------------------------------------------------------
+  // التاريخ المتوقع للتوريد (فريق الشراء والمدير) — الأمر بيتحول "مفتوح" لو كان "جديد"
+  // ---------------------------------------------------------------------
+  const openExpected = (orderId: number, item: PurchaseItem) => {
+    setExpItem({ orderId, item });
+    setExpDate(item.expected_supply_date ?? "");
+  };
+
+  const submitExpected = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!expItem || saving) return;
+    setSaving(true);
+    const value = expDate || null;
+    const { error } = await supabase.from("purchase_items")
+      .update({ expected_supply_date: value }).eq("id", expItem.item.id);
+    if (error) { toast.error(error.message); setSaving(false); return; }
+    const { orderId, item } = expItem;
+    setOrders(prev => prev.map(o => o.id === orderId ? {
+      ...o,
+      status: value && o.status === "جديد" ? "مفتوح" : o.status,
+      purchase_items: o.purchase_items.map(it => it.id === item.id ? { ...it, expected_supply_date: value } : it),
+    } : o));
+    setExpItem(null); setSaving(false);
+    toast.success("تم حفظ التاريخ المتوقع");
   };
 
   const removeItem = async (orderId: number, item: PurchaseItem) => {
@@ -567,6 +608,14 @@ export default function PurchasesClient({
                                   <td>
                                     <div className="flex items-center justify-end gap-0.5">
                                       {canReceive && isOpenItem(item.status) && (
+                                        <Tooltip content="التاريخ المتوقع">
+                                          <button type="button" onClick={() => openExpected(order.id, item)}
+                                            className="eg-icon-btn" aria-label="التاريخ المتوقع للتوريد">
+                                            <CalendarDays className="size-3.5" />
+                                          </button>
+                                        </Tooltip>
+                                      )}
+                                      {canReceive && isOpenItem(item.status) && (
                                         <Tooltip content="تسجيل التوريد">
                                           <button type="button" onClick={() => openReceive(order.id, [item])}
                                             className="eg-icon-btn" aria-label="تسجيل توريد البند">
@@ -709,6 +758,20 @@ export default function PurchasesClient({
           <button type="submit" disabled={saving || receiveTotal <= 0} className="eg-btn-primary w-full">
             {saving ? <Spinner /> : <PackageCheck className="size-4" />}
             {saving ? "جاري الحفظ..." : "تسجيل التوريد"}
+          </button>
+        </form>
+      </Modal>
+
+      {/* التاريخ المتوقع للتوريد */}
+      <Modal open={!!expItem} onClose={() => setExpItem(null)} title="التاريخ المتوقع للتوريد"
+        description={expItem ? <>الصنف: <span className="font-medium text-text">{expItem.item.item_name}</span></> : undefined}>
+        <form onSubmit={submitExpected} className="space-y-4">
+          <Field label="التاريخ المتوقع للتوريد">
+            <input type="date" value={expDate} onChange={e => setExpDate(e.target.value)} className="eg-input" autoFocus />
+          </Field>
+          <button type="submit" disabled={saving} className="eg-btn-success w-full">
+            {saving ? <Spinner /> : <Save className="size-4" />}
+            {saving ? "جاري الحفظ..." : "حفظ التاريخ"}
           </button>
         </form>
       </Modal>
