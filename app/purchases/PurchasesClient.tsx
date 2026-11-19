@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 
 // ---------------------------------------------------------------------
-// أنواع البيانات: أمر شراء (Header - له رقم تسلسلي وصورة) بداخله بنود
+// أنواع البيانات: أمر شراء (Header - له رقم تسلسلي وصور) بداخله بنود
 // ---------------------------------------------------------------------
 const CATEGORIES = ["عدد", "كيلو", "متر", "علبة"] as const;
 type Category = typeof CATEGORIES[number];
@@ -34,7 +34,13 @@ interface PurchaseItem {
   category: Category;
   quantity: number;
   status: string;
-  supply_date: string | null;
+  expected_supply_date: string | null;   // التاريخ المتوقع للتوريد
+  supply_date: string | null;            // التاريخ الفعلي للتوريد
+}
+
+interface OrderImage {
+  id: number;
+  image_path: string;
 }
 
 interface PurchaseOrder {
@@ -42,10 +48,10 @@ interface PurchaseOrder {
   order_no: string | null;
   wo_id: number | null;
   request_date: string;
-  image_path: string | null;
   status: string;
   department?: string | null;
   work_order?: { wo_number: string } | null;
+  images: OrderImage[];
   purchase_items: PurchaseItem[];
 }
 
@@ -53,15 +59,15 @@ type ItemForm = {
   item_name: string;
   category: Category;
   quantity: string;
-  supply_date: string;
+  expected_supply_date: string;
   status: string;
 };
 const emptyItemForm = (): ItemForm => ({
-  item_name: "", category: "عدد", quantity: "1", supply_date: "", status: "مفتوح",
+  item_name: "", category: "عدد", quantity: "1", expected_supply_date: "", status: "مفتوح",
 });
 
-type OrderForm = { order_no: string; wo_id: string; status: string; image: File | null };
-const emptyOrderForm = (): OrderForm => ({ order_no: "", wo_id: "", status: "جديد", image: null });
+type OrderForm = { order_no: string; wo_id: string; status: string; images: File[] };
+const emptyOrderForm = (): OrderForm => ({ order_no: "", wo_id: "", status: "جديد", images: [] });
 
 type WOOption = Pick<WorkOrder, "id" | "wo_number">;
 
@@ -88,14 +94,14 @@ export default function PurchasesClient({
   // الأدمن يعدّل أي أمر. السكرتير يعدّل الأمر وبنوده إلا لو الأمر "تم التوريد جزئيا"
   const canEditOrder = (o: PurchaseOrder) => isAdmin || (isSecretary && o.status !== PARTIAL_STATUS);
 
-  // ---------- مودال: أمر شراء جديد (ببنوده + صورته) ----------
+  // ---------- مودال: أمر شراء جديد (ببنوده + صوره) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
   const [newOrder, setNewOrder] = useState<OrderForm>(emptyOrderForm());
   const [newOrderItems, setNewOrderItems] = useState<ItemForm[]>([emptyItemForm()]);
   const [newOrderError, setNewOrderError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // ---------- مودال: تعديل بيانات أمر الشراء (أمر الشغل + الصورة) ----------
+  // ---------- مودال: تعديل بيانات أمر الشراء (أمر الشغل + الصور) ----------
   const [editOrder, setEditOrder] = useState<PurchaseOrder | null>(null);
   const [editOrderForm, setEditOrderForm] = useState<OrderForm>(emptyOrderForm());
 
@@ -107,18 +113,22 @@ export default function PurchasesClient({
   const [editItem, setEditItem] = useState<PurchaseItem | null>(null);
   const [editItemForm, setEditItemForm] = useState<ItemForm>(emptyItemForm());
 
-  // بيرجع مسار الصورة لو الرفع والحفظ نجحوا، وإلا null (والخطأ بيظهر كإشعار)
-  const uploadOrderImage = async (file: File, orderId: number): Promise<string | null> => {
-    const path = `purchases/${orderId}/${Date.now()}_${file.name}`;
+  // بيرجع الصورة بعد ما تترفع وتتسجل في الجدول، وإلا null (والخطأ بيظهر كإشعار)
+  const uploadOrderImage = async (file: File, orderId: number): Promise<OrderImage | null> => {
+    const path = `purchases/${orderId}/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${file.name}`;
     const { error: uploadErr } = await supabase.storage.from("purchases").upload(path, file, { upsert: true });
     if (uploadErr) { toast.error(`تعذّر رفع الصورة: ${uploadErr.message}`); return null; }
-    const { error: updateErr } = await supabase.from("purchase_orders").update({ image_path: path }).eq("id", orderId);
-    if (updateErr) { toast.error(updateErr.message); return null; }
-    return path;
+    const { data, error: insertErr } = await supabase
+      .from("purchase_order_images")
+      .insert({ purchase_order_id: orderId, image_path: path })
+      .select("id, image_path")
+      .single();
+    if (insertErr) { toast.error(insertErr.message); return null; }
+    return data as OrderImage;
   };
 
   // ---------------------------------------------------------------------
-  // إنشاء أمر شراء جديد (بصورته) مع كل بنوده دفعة واحدة
+  // إنشاء أمر شراء جديد (بصوره) مع كل بنوده دفعة واحدة
   // ---------------------------------------------------------------------
   const resetNewOrder = () => { setNewOrder(emptyOrderForm()); setNewOrderItems([emptyItemForm()]); setNewOrderError(""); };
   const closeNewOrder = () => { setAddOrderOpen(false); resetNewOrder(); };
@@ -134,6 +144,7 @@ export default function PurchasesClient({
     if (saving) return;
     const validItems = newOrderItems.filter(it => it.item_name.trim());
     if (validItems.length === 0) { setNewOrderError("لازم بند واحد على الأقل بيه اسم صنف"); return; }
+    if (newOrder.images.length === 0) { setNewOrderError("لازم صورة واحدة على الأقل للأمر"); return; }
     setNewOrderError("");
     setSaving(true);
 
@@ -150,8 +161,11 @@ export default function PurchasesClient({
       .single();
     if (orderErr) { toast.error(orderErr.message); setSaving(false); return; }
 
-    let orderImagePath = order.image_path;
-    if (newOrder.image) orderImagePath = (await uploadOrderImage(newOrder.image, order.id)) ?? order.image_path;
+    const images: OrderImage[] = [];
+    for (const f of newOrder.images) {
+      const img = await uploadOrderImage(f, order.id);
+      if (img) images.push(img);
+    }
 
     const rowsToInsert = validItems.map(it => ({
       purchase_order_id: order.id,
@@ -159,7 +173,7 @@ export default function PurchasesClient({
       category: it.category,
       quantity: parseFloat(it.quantity) || 1,
       status: it.status,
-      supply_date: it.supply_date || null,
+      expected_supply_date: it.expected_supply_date || null,
     }));
     const { data: insertedItems, error: itemsErr } = await supabase
       .from("purchase_items").insert(rowsToInsert).select("*");
@@ -167,24 +181,28 @@ export default function PurchasesClient({
 
     setOrders(prev => [{
       ...order,
-      image_path: orderImagePath,
+      images,
       purchase_items: insertedItems as PurchaseItem[],
     }, ...prev]);
     setAddOrderOpen(false); resetNewOrder(); setSaving(false);
-    toast.success("تم حفظ أمر الشراء");
+    if (images.length < newOrder.images.length) toast.error("الأمر اتحفظ بس بعض الصور ماتحفظتش، ضيفها من تعديل الأمر");
+    else toast.success("تم حفظ أمر الشراء");
   };
 
   // ---------------------------------------------------------------------
-  // تعديل بيانات أمر الشراء (أمر الشغل + استبدال الصورة)
+  // تعديل بيانات أمر الشراء (أمر الشغل + إضافة صور + حذف صورة)
   // ---------------------------------------------------------------------
   const openEditOrder = (order: PurchaseOrder) => {
     setEditOrder(order);
-    setEditOrderForm({ order_no: order.order_no ?? "", wo_id: order.wo_id ? String(order.wo_id) : "", status: order.status, image: null });
+    setEditOrderForm({
+      order_no: order.order_no ?? "", wo_id: order.wo_id ? String(order.wo_id) : "", status: order.status, images: [],
+    });
   };
 
   const submitEditOrder = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!editOrder || saving) return;
+    if (editOrder.images.length + editOrderForm.images.length === 0) { toast.error("لازم صورة واحدة على الأقل للأمر"); return; }
     setSaving(true);
     const payload = {
       order_no: editOrderForm.order_no.trim() || null,
@@ -193,14 +211,37 @@ export default function PurchasesClient({
     };
     const { error } = await supabase.from("purchase_orders").update(payload).eq("id", editOrder.id);
     if (error) { toast.error(error.message); setSaving(false); return; }
-    let newImagePath = editOrder.image_path;
-    if (editOrderForm.image) newImagePath = (await uploadOrderImage(editOrderForm.image, editOrder.id)) ?? editOrder.image_path;
+    const added: OrderImage[] = [];
+    for (const f of editOrderForm.images) {
+      const img = await uploadOrderImage(f, editOrder.id);
+      if (img) added.push(img);
+    }
     const wo = wos.find(w => String(w.id) === editOrderForm.wo_id);
+    const images = [...editOrder.images, ...added];
     setOrders(prev => prev.map(o => o.id === editOrder.id
-      ? { ...o, ...payload, image_path: newImagePath, work_order: wo ? { wo_number: wo.wo_number } : null }
+      ? { ...o, ...payload, images, work_order: wo ? { wo_number: wo.wo_number } : null }
       : o));
     setEditOrder(null); setSaving(false);
     toast.success("تم حفظ التعديل");
+  };
+
+  // حذف صورة محفوظة من الأمر (لازم يفضل صورة واحدة على الأقل)
+  const removeOrderImage = async (img: OrderImage) => {
+    if (!editOrder) return;
+    if (editOrder.images.length + editOrderForm.images.length <= 1) { toast.error("لازم يفضل صورة واحدة على الأقل"); return; }
+    const ok = await confirm({
+      title: "حذف هذه الصورة؟",
+      message: "هتتشال الصورة من أمر الشراء.",
+      confirmText: "حذف الصورة",
+      tone: "danger",
+    });
+    if (!ok) return;
+    const { error } = await supabase.from("purchase_order_images").delete().eq("id", img.id);
+    if (error) { toast.error(error.message); return; }
+    const remaining = editOrder.images.filter(i => i.id !== img.id);
+    setEditOrder({ ...editOrder, images: remaining });
+    setOrders(prev => prev.map(o => o.id === editOrder.id ? { ...o, images: remaining } : o));
+    toast.success("تم حذف الصورة");
   };
 
   // ---------------------------------------------------------------------
@@ -218,7 +259,7 @@ export default function PurchasesClient({
       category: addItemForm.category,
       quantity: parseFloat(addItemForm.quantity) || 1,
       status: addItemForm.status,
-      supply_date: addItemForm.supply_date || null,
+      expected_supply_date: addItemForm.expected_supply_date || null,
     };
     const { data, error } = await supabase.from("purchase_items").insert(payload).select("*").single();
     if (error) { toast.error(error.message); setSaving(false); return; }
@@ -235,7 +276,7 @@ export default function PurchasesClient({
     setEditItem(item);
     setEditItemForm({
       item_name: item.item_name, category: item.category, quantity: String(item.quantity),
-      supply_date: item.supply_date ?? "", status: item.status,
+      expected_supply_date: item.expected_supply_date ?? "", status: item.status,
     });
   };
 
@@ -248,7 +289,7 @@ export default function PurchasesClient({
       category: editItemForm.category,
       quantity: parseFloat(editItemForm.quantity) || editItem.quantity,
       status: editItemForm.status,
-      supply_date: editItemForm.supply_date || null,
+      expected_supply_date: editItemForm.expected_supply_date || null,
     };
     const { error } = await supabase.from("purchase_items").update(payload).eq("id", editItem.id);
     if (error) { toast.error(error.message); setSaving(false); return; }
@@ -261,34 +302,26 @@ export default function PurchasesClient({
   };
 
   // ---------------------------------------------------------------------
-  // حذف بند / حذف أمر شراء كامل
+  // تسجيل التوريد: البند بيتحول لـ "تم التوريد" والتاريخ الفعلي = النهاردة
   // ---------------------------------------------------------------------
-  // تسجيل التوريد: البند بيتحول لـ "تم التوريد"، ولو مفيش تاريخ توريد بيتحط تاريخ النهاردة
   const markSupplied = async (orderId: number, list: PurchaseItem[]) => {
     const open = list.filter(it => it.status === "مفتوح");
     if (open.length === 0) { toast.error("مفيش بنود مفتوحة للتسجيل"); return; }
     const ok = await confirm({
       title: open.length === 1 ? "تسجيل توريد البند؟" : `تسجيل توريد ${open.length} بند؟`,
-      message: <>هيتسجلوا كـ <span className="font-semibold text-text">تم التوريد</span>.</>,
+      message: <>هيتسجلوا كـ <span className="font-semibold text-text">تم التوريد</span> بتاريخ النهاردة.</>,
       confirmText: "تسجيل التوريد",
     });
     if (!ok) return;
-    const withDate = open.filter(it => it.supply_date).map(it => it.id);
-    const withoutDate = open.filter(it => !it.supply_date).map(it => it.id);
-    if (withDate.length) {
-      const { error } = await supabase.from("purchase_items").update({ status: "تم التوريد" }).in("id", withDate);
-      if (error) { toast.error(error.message); return; }
-    }
-    if (withoutDate.length) {
-      const { error } = await supabase.from("purchase_items")
-        .update({ status: "تم التوريد", supply_date: todayStr }).in("id", withoutDate);
-      if (error) { toast.error(error.message); return; }
-    }
-    const doneIds = new Set(open.map(it => it.id));
+    const ids = open.map(it => it.id);
+    const { error } = await supabase.from("purchase_items")
+      .update({ status: "تم التوريد", supply_date: todayStr }).in("id", ids);
+    if (error) { toast.error(error.message); return; }
+    const doneIds = new Set(ids);
     setOrders(prev => prev.map(o => o.id === orderId ? {
       ...o,
       purchase_items: o.purchase_items.map(it => doneIds.has(it.id)
-        ? { ...it, status: "تم التوريد", supply_date: it.supply_date ?? todayStr } : it),
+        ? { ...it, status: "تم التوريد", supply_date: todayStr } : it),
     } : o));
     setSelItems(prev => { const n = new Set(prev); doneIds.forEach(id => n.delete(id)); return n; });
     toast.success(`تم تسجيل توريد ${open.length} بند`);
@@ -352,14 +385,13 @@ export default function PurchasesClient({
             <EmptyState
               icon={ShoppingCart}
               message="لسه مفيش أوامر شراء"
-              description="ابدأ بإضافة أول أمر شراء ببنوده وصورة الفاتورة."
+              description="ابدأ بإضافة أول أمر شراء ببنوده وصور الفاتورة."
               action={newOrderButton}
             />
           </div>
         ) : (
           <div className="eg-stagger space-y-3">
             {orders.map(order => {
-              const imageUrl = getImageUrl(order.image_path);
               const count = order.purchase_items.length;
               return (
                 <details key={order.id} open className="eg-card group overflow-hidden !p-0">
@@ -377,13 +409,13 @@ export default function PurchasesClient({
                       </span>
                       <Badge label={`${count} بند`} tone="neutral" dot={false} className="tabular-nums" />
                       <Badge label={order.status} tone="neutral" dot={false} />
-                      {imageUrl && (
-                        <a href={imageUrl} target="_blank" rel="noopener"
+                      {order.images.map((img, i) => (
+                        <a key={img.id} href={getImageUrl(img.image_path) ?? "#"} target="_blank" rel="noopener"
                           onClick={e => e.stopPropagation()}
                           className="eg-link inline-flex items-center gap-1 text-xs">
-                          <ImageIcon className="size-3.5" />صورة الأمر
+                          <ImageIcon className="size-3.5" />صورة {i + 1}
                         </a>
-                      )}
+                      ))}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       {canEditOrder(order) && (
@@ -431,21 +463,22 @@ export default function PurchasesClient({
                   })()}
                   {count > 0 ? (
                     <div className="overflow-x-auto">
-                      <table className="eg-table min-w-[600px]">
+                      <table className="eg-table min-w-[720px]">
                         <thead>
                           <tr>
                             {isAdmin && <th className="w-10"><span className="sr-only">تحديد</span></th>}
                             <th>الصنف</th>
                             <th className="w-24">الكمية</th>
                             <th className="w-24">الفئة</th>
-                            <th className="w-44">تاريخ التوريد</th>
+                            <th className="w-36">التوريد المتوقع</th>
+                            <th className="w-36">التوريد الفعلي</th>
                             <th className="w-28">الحالة</th>
                             {canEditOrder(order) && <th className="w-20"><span className="sr-only">إجراءات</span></th>}
                           </tr>
                         </thead>
                         <tbody>
                           {order.purchase_items.map(item => {
-                            const late = !!item.supply_date && item.supply_date < todayStr && item.status === "مفتوح";
+                            const late = !!item.expected_supply_date && item.expected_supply_date < todayStr && item.status === "مفتوح";
                             return (
                               <tr key={item.id}>
                                 {isAdmin && (
@@ -464,9 +497,10 @@ export default function PurchasesClient({
                                 <td className="tabular-nums">{item.quantity}</td>
                                 <td className="text-subtext">{item.category}</td>
                                 <td className={cn("tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
-                                  {item.supply_date ?? "—"}
+                                  {item.expected_supply_date ?? "—"}
                                   {late && <span className="mr-1.5 rounded bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium">متأخر</span>}
                                 </td>
+                                <td className="tabular-nums text-subtext">{item.supply_date ?? "—"}</td>
                                 <td><Badge label={item.status} /></td>
                                 {canEditOrder(order) && (
                                   <td>
@@ -521,7 +555,7 @@ export default function PurchasesClient({
         )}
       </PageBody>
 
-      {/* أمر شراء جديد + صورته + بنوده */}
+      {/* أمر شراء جديد + صوره + بنوده */}
       <Modal open={addOrderOpen} onClose={closeNewOrder} title="أمر شراء جديد">
         <form onSubmit={createOrder} className="space-y-5">
           <OrderFields value={newOrder} onChange={patch => setNewOrder(f => ({ ...f, ...patch }))} wos={wos} autoFocus />
@@ -558,12 +592,12 @@ export default function PurchasesClient({
         </form>
       </Modal>
 
-      {/* تعديل بيانات أمر الشراء (أمر الشغل + الصورة) */}
+      {/* تعديل بيانات أمر الشراء (أمر الشغل + الصور) */}
       <Modal open={!!editOrder} onClose={() => setEditOrder(null)}
         title={editOrder?.order_no ? `تعديل الأمر #${editOrder.order_no}` : "تعديل الأمر"}>
         <form onSubmit={submitEditOrder} className="space-y-5">
           <OrderFields value={editOrderForm} onChange={patch => setEditOrderForm(f => ({ ...f, ...patch }))}
-            wos={wos} currentImageUrl={getImageUrl(editOrder?.image_path)} autoFocus />
+            wos={wos} currentImages={editOrder?.images ?? []} onRemoveCurrent={removeOrderImage} autoFocus />
           <button type="submit" disabled={saving} className="eg-btn-success w-full">
             {saving ? <Spinner /> : <Save className="size-4" />}
             {saving ? "جاري الحفظ..." : "حفظ التعديل"}
@@ -600,7 +634,7 @@ export default function PurchasesClient({
 }
 
 // ---------------------------------------------------------------------
-// عناصر نموذج بند قابلة لإعادة الاستخدام (بدون صورة - الصورة على الأمر)
+// عناصر نموذج بند قابلة لإعادة الاستخدام (بدون صور - الصور على الأمر)
 // متعرفة برّه المكوّن الرئيسي علشان الحقول ماتتعملهاش mount من جديد مع كل حرف
 // ---------------------------------------------------------------------
 function ItemFields({ value, onChange, autoFocus }: {
@@ -621,8 +655,9 @@ function ItemFields({ value, onChange, autoFocus }: {
           {CATEGORIES.map(c => <option key={c}>{c}</option>)}
         </select>
       </Field>
-      <Field label="تاريخ التوريد المتوقع" className="col-span-2 sm:col-span-1">
-        <input type="date" value={value.supply_date} onChange={e => onChange({ supply_date: e.target.value })} className="eg-input" />
+      <Field label="التاريخ المتوقع للتوريد" className="col-span-2 sm:col-span-1">
+        <input type="date" value={value.expected_supply_date}
+          onChange={e => onChange({ expected_supply_date: e.target.value })} className="eg-input" />
       </Field>
       <Field label="الحالة" className="col-span-2 sm:col-span-1">
         <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
@@ -633,14 +668,19 @@ function ItemFields({ value, onChange, autoFocus }: {
   );
 }
 
-// نموذج بيانات أمر الشراء نفسه: رقم الأمر + أمر الشغل + الصورة
-function OrderFields({ value, onChange, wos, currentImageUrl, autoFocus }: {
+// نموذج بيانات أمر الشراء نفسه: رقم الأمر + أمر الشغل + الحالة + الصور
+function OrderFields({ value, onChange, wos, currentImages, onRemoveCurrent, autoFocus }: {
   value: OrderForm;
   onChange: (patch: Partial<OrderForm>) => void;
   wos: WOOption[];
-  currentImageUrl?: string | null;
+  currentImages?: OrderImage[];
+  onRemoveCurrent?: (img: OrderImage) => void;
   autoFocus?: boolean;
 }) {
+  const addFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    onChange({ images: [...value.images, ...Array.from(files)] });
+  };
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -660,22 +700,43 @@ function OrderFields({ value, onChange, wos, currentImageUrl, autoFocus }: {
           </select>
         </Field>
       </div>
-      <Field label="صورة إيصال / فاتورة أمر الشراء (اختياري)">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <Field label="صور الفاتورة / أمر الشراء (صورة واحدة على الأقل)">
+        <div className="space-y-2">
+          {(currentImages ?? []).map((img, i) => (
+            <div key={img.id} className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-card2/40 px-3 py-2">
+              <a href={getImageUrl(img.image_path) ?? "#"} target="_blank" rel="noopener"
+                className="eg-link inline-flex items-center gap-1 text-xs">
+                <ExternalLink className="size-3" />صورة {i + 1}
+              </a>
+              {onRemoveCurrent && (
+                <button type="button" onClick={() => onRemoveCurrent(img)} className="eg-btn-danger-soft eg-btn-xs">
+                  <Trash2 className="size-3" />حذف
+                </button>
+              )}
+            </div>
+          ))}
           <label className={cn(
             "eg-btn-ghost eg-btn-sm max-w-full cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/60",
-            value.image && "border-accent/40 text-accent",
+            value.images.length > 0 && "border-accent/40 text-accent",
           )}>
             <ImageIcon className="size-3.5 shrink-0" />
-            <span className="max-w-[15rem] truncate">{value.image ? value.image.name : "اختر صورة"}</span>
-            <input type="file" accept="image/*" className="sr-only"
-              onChange={e => onChange({ image: e.target.files?.[0] ?? null })} />
+            <span>{value.images.length > 0 ? `إضافة صور (${value.images.length} مختارة)` : "اختر صور"}</span>
+            <input type="file" accept="image/*" multiple className="sr-only"
+              onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
           </label>
-          {currentImageUrl && !value.image && (
-            <a href={currentImageUrl} target="_blank" rel="noopener"
-              className="eg-link inline-flex items-center gap-1 text-xs">
-              <ExternalLink className="size-3" />عرض الصورة الحالية
-            </a>
+          {value.images.length > 0 && (
+            <ul className="space-y-1">
+              {value.images.map((f, idx) => (
+                <li key={`${f.name}-${idx}`} className="flex items-center justify-between gap-2 text-xs text-subtext">
+                  <span className="min-w-0 truncate">{f.name}</span>
+                  <button type="button"
+                    onClick={() => onChange({ images: value.images.filter((_, i) => i !== idx) })}
+                    className="eg-icon-btn-danger" aria-label={`إزالة ${f.name}`}>
+                    <Trash2 className="size-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </Field>

@@ -57,7 +57,7 @@ type ItemRow = {
 };
 type Att = { id: number; status: string; technician?: { name: string; department: string | null } };
 type PurchaseItem = {
-  id: number; item_name: string; status: string; supply_date: string | null;
+  id: number; item_name: string; status: string; expected_supply_date: string | null;
   purchase_order?: { order_no: string | null; work_order?: { wo_number: string } | null } | null;
 };
 type DeptRow = { item_id: number; department: string; status: string };
@@ -221,7 +221,7 @@ export default function DashboardClient({
     if (overallLate > 0) out.push({ text: `${overallLate} ${unit} متأخر عن موعد التسليم`, tone: "danger" });
     const stopped = rows.filter(r => r.status === "متوقف").length;
     if (stopped > 0) out.push({ text: `${stopped} ${unit} متوقف`, tone: "warning" });
-    const latePurchases = purchaseItems.filter(p => p.status === "مفتوح" && p.supply_date && p.supply_date < today);
+    const latePurchases = purchaseItems.filter(p => p.status === "مفتوح" && p.expected_supply_date && p.expected_supply_date < today);
     if (latePurchases.length > 0) out.push({ text: `${latePurchases.length} صنف شراء متأخر التوريد`, tone: "warning", href: "/purchases" });
     const absent = attendance.filter(a => a.status === "غياب").length;
     if (absent > 2) out.push({ text: `${absent} غياب النهارده`, tone: "warning", href: "/attendance" });

@@ -1,16 +1,24 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, LogIn, Mail, Lock } from "lucide-react";
+import { Eye, EyeOff, LogIn, User, Lock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { BrandMark } from "@/components/layout/Sidebar";
 import { FormError } from "@/components/ui/Field";
 import Spinner from "@/components/ui/Spinner";
 
+// الحسابات في Supabase مبنية على إيميل داخلي: اسم المستخدم + الدومين ده.
+// المستخدم بيدخل اسم المستخدم بس، والكود بيكمّل الدومين.
+const AUTH_DOMAIN = "eg.com";
+const toLoginEmail = (input: string) => {
+  const v = input.trim().toLowerCase();
+  return v.includes("@") ? v : `${v}@${AUTH_DOMAIN}`;
+};
+
 // رسائل Supabase بتيجي بالإنجليزي — نترجم الشائع منها
 const loginError = (message: string) => {
   const m = message.toLowerCase();
-  if (m.includes("invalid login credentials")) return "البريد الإلكتروني أو كلمة المرور غير صحيحة";
+  if (m.includes("invalid login credentials")) return "اسم المستخدم أو كلمة المرور غير صحيحة";
   if (m.includes("email not confirmed")) return "الحساب ده لسه ماتأكدش من الإيميل";
   if (m.includes("rate limit") || m.includes("too many")) return "محاولات كتير ورا بعض، استنى شوية وجرّب تاني";
   if (m.includes("fetch") || m.includes("network")) return "مفيش اتصال بالسيرفر، اتأكد من الإنترنت";
@@ -18,7 +26,7 @@ const loginError = (message: string) => {
 };
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -29,7 +37,7 @@ export default function LoginPage() {
     e.preventDefault();
     if (loading) return;
     setLoading(true); setError("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email: toLoginEmail(username), password });
     if (error) { setError(loginError(error.message)); setLoading(false); return; }
     router.push("/dashboard");
   };
@@ -51,16 +59,16 @@ export default function LoginPage() {
 
         <div className="eg-card !p-6 shadow-pop">
           <h2 className="text-base font-semibold text-text">تسجيل الدخول</h2>
-          <p className="mt-0.5 text-xs text-subtext">ادخل بالإيميل وكلمة المرور الخاصين بيك.</p>
+          <p className="mt-0.5 text-xs text-subtext">ادخل باسم المستخدم وكلمة المرور الخاصين بيك.</p>
 
           <form onSubmit={handleLogin} className="mt-5 space-y-4">
             <div>
-              <label htmlFor="email" className="eg-label">البريد الإلكتروني</label>
+              <label htmlFor="username" className="eg-label">اسم المستخدم</label>
               <div className="relative">
-                <Mail aria-hidden className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
-                <input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)}
-                  className="eg-input pr-9" placeholder="name@example.com" autoComplete="email" dir="ltr"
-                  required autoFocus />
+                <User aria-hidden className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+                <input id="username" type="text" value={username} onChange={e => setUsername(e.target.value)}
+                  className="eg-input pr-9" placeholder="username" autoComplete="username" dir="ltr"
+                  autoCapitalize="none" spellCheck={false} required autoFocus />
               </div>
             </div>
             <div>

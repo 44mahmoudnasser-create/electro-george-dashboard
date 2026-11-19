@@ -36,7 +36,7 @@ export default async function DashboardPage() {
       .order("expected_delivery", { ascending: true, nullsFirst: false }),
     attendanceQuery,
     supabase.from("purchase_items")
-      .select("id, item_name, status, supply_date, purchase_order:purchase_orders(order_no, work_order:work_orders(wo_number))")
+      .select("id, item_name, status, expected_supply_date, purchase_order:purchase_orders(order_no, work_order:work_orders(wo_number))")
       .neq("status", "ملغي")
       .order("id", { ascending: false })
       .limit(300),
