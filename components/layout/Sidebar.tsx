@@ -57,7 +57,7 @@ export default function Sidebar({
   const router = useRouter();
   const toast = useToast();
   const role = user?.role ?? "secretary";
-  const groups = navGroupsForRole(role);
+  const groups = navGroupsForRole(role, user?.department);
   const asideRef = useRef<HTMLElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [pwOpen, setPwOpen] = useState(false);

@@ -42,14 +42,18 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/activity-log",  label: "سجل النشاط",        short: "السجل",    icon: History,         group: "system" },
 ];
 
-export function navForRole(role: string | null | undefined): NavItem[] {
+// قسم الشراء (department = purchase) بيشوف صفحة طلبات الشراء بس، بغض النظر عن الدور
+export const PURCHASE_DEPT = "purchase";
+
+export function navForRole(role: string | null | undefined, department?: string | null): NavItem[] {
+  if ((department ?? "").toLowerCase() === PURCHASE_DEPT) return NAV_ITEMS.filter(n => n.href === "/purchases");
   if (role === "secretary") return NAV_ITEMS.filter(n => n.secretaryVisible);
   return NAV_ITEMS;
 }
 
 // الروابط مقسمة على مجموعات (المجموعات الفاضية بتتشال)
-export function navGroupsForRole(role: string | null | undefined) {
-  const items = navForRole(role);
+export function navGroupsForRole(role: string | null | undefined, department?: string | null) {
+  const items = navForRole(role, department);
   return NAV_GROUPS
     .map(g => ({ ...g, items: items.filter(i => i.group === g.key) }))
     .filter(g => g.items.length > 0);

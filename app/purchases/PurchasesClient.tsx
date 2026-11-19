@@ -21,11 +21,14 @@ import {
 // ---------------------------------------------------------------------
 const CATEGORIES = ["عدد", "كيلو", "متر", "علبة"] as const;
 type Category = typeof CATEGORIES[number];
-const STATUSES = ["مفتوح", "تم التوريد", "ملغي"] as const;
+// حالات البند (لازم تطابق purchase_items_status_check في 034)
+const STATUSES = ["مفتوح", "تم التوريد جزئيا", "تم التوريد", "ملغي"] as const;
 // حالات أمر الشراء (الهيدر) — 4 حالات
 const ORDER_STATUSES = ["جديد", "مفتوح", "تم التوريد", "تم التوريد جزئيا"] as const;
 // الأمر "تم التوريد جزئيا" بيقفل التعديل على السكرتير (نفس قفل الداتابيز في 031)
 const PARTIAL_STATUS = "تم التوريد جزئيا";
+// البند اللي لسه فيه كمية مستنية (مفتوح أو توريد جزئي)
+const isOpenItem = (status: string) => status === "مفتوح" || status === "تم التوريد جزئيا";
 
 interface PurchaseItem {
   id: number;
@@ -33,9 +36,10 @@ interface PurchaseItem {
   item_name: string;
   category: Category;
   quantity: number;
+  received_qty: number;                  // الكمية اللي اتوردت فعلاً
   status: string;
   expected_supply_date: string | null;   // التاريخ المتوقع للتوريد
-  supply_date: string | null;            // التاريخ الفعلي للتوريد
+  supply_date: string | null;            // آخر تاريخ توريد فعلي
 }
 
 interface OrderImage {
@@ -86,13 +90,21 @@ export default function PurchasesClient({
   const toast = useToast();
   const confirm = useConfirm();
   const [orders, setOrders] = useState<PurchaseOrder[]>(initialOrders);
-  // بنود محددة للتسجيل الجماعي للتوريد (بتتحدد بالـ checkbox)
+  // بنود محددة للتوريد الجماعي (بتتحدد بالـ checkbox)
   const [selItems, setSelItems] = useState<Set<number>>(new Set());
   const todayStr = today();
+
+  // ---------- الصلاحيات ----------
   const isAdmin = role === "admin";
   const isSecretary = role === "secretary";
+  // قسم الشراء: يسجل التوريد بس، مايعدّلش الأوامر ولا البنود
+  const isPurchaseDept = (department ?? "").toLowerCase() === "purchase";
+  // الأدمن الكامل (مش قسم الشراء)
+  const isFullAdmin = isAdmin && !isPurchaseDept;
+  // التوريد (الكامل أو الجزئي) للأدمن وقسم الشراء
+  const canReceive = isAdmin || isPurchaseDept;
   // الأدمن يعدّل أي أمر. السكرتير يعدّل الأمر وبنوده إلا لو الأمر "تم التوريد جزئيا"
-  const canEditOrder = (o: PurchaseOrder) => isAdmin || (isSecretary && o.status !== PARTIAL_STATUS);
+  const canEditOrder = (o: PurchaseOrder) => isFullAdmin || (isSecretary && o.status !== PARTIAL_STATUS);
 
   // ---------- مودال: أمر شراء جديد (ببنوده + صوره) ----------
   const [addOrderOpen, setAddOrderOpen] = useState(false);
@@ -112,6 +124,11 @@ export default function PurchasesClient({
   // ---------- مودال: تعديل بند ----------
   const [editItem, setEditItem] = useState<PurchaseItem | null>(null);
   const [editItemForm, setEditItemForm] = useState<ItemForm>(emptyItemForm());
+
+  // ---------- مودال: تسجيل التوريد (كامل أو جزئي بالكمية) ----------
+  const [receiveOrderId, setReceiveOrderId] = useState<number | null>(null);
+  const [receiveItems, setReceiveItems] = useState<PurchaseItem[]>([]);
+  const [receiveQty, setReceiveQty] = useState<Record<number, string>>({});
 
   // بيرجع الصورة بعد ما تترفع وتتسجل في الجدول، وإلا null (والخطأ بيظهر كإشعار)
   const uploadOrderImage = async (file: File, orderId: number): Promise<OrderImage | null> => {
@@ -253,11 +270,13 @@ export default function PurchasesClient({
     e?.preventDefault();
     if (addItemOrderId == null || !addItemForm.item_name.trim() || saving) return;
     setSaving(true);
+    const quantity = parseFloat(addItemForm.quantity) || 1;
     const payload = {
       purchase_order_id: addItemOrderId,
       item_name: addItemForm.item_name,
       category: addItemForm.category,
-      quantity: parseFloat(addItemForm.quantity) || 1,
+      quantity,
+      received_qty: addItemForm.status === "تم التوريد" ? quantity : 0,
       status: addItemForm.status,
       expected_supply_date: addItemForm.expected_supply_date || null,
     };
@@ -284,11 +303,16 @@ export default function PurchasesClient({
     e?.preventDefault();
     if (!editItem || saving) return;
     setSaving(true);
+    const quantity = parseFloat(editItemForm.quantity) || editItem.quantity;
+    const status = editItemForm.status;
+    // التعديل اليدوي للحالة بيتعامل مع الكمية المستلمة: "تم التوريد" = كل الكمية، "مفتوح" = صفر
+    const received_qty = status === "تم التوريد" ? quantity : status === "مفتوح" ? 0 : Math.min(editItem.received_qty, quantity);
     const payload = {
       item_name: editItemForm.item_name || editItem.item_name,
       category: editItemForm.category,
-      quantity: parseFloat(editItemForm.quantity) || editItem.quantity,
-      status: editItemForm.status,
+      quantity,
+      received_qty,
+      status,
       expected_supply_date: editItemForm.expected_supply_date || null,
     };
     const { error } = await supabase.from("purchase_items").update(payload).eq("id", editItem.id);
@@ -302,29 +326,59 @@ export default function PurchasesClient({
   };
 
   // ---------------------------------------------------------------------
-  // تسجيل التوريد: البند بيتحول لـ "تم التوريد" والتاريخ الفعلي = النهاردة
+  // تسجيل التوريد: كامل أو جزئي بالكمية لكل بند
+  // الكمية المستلمة الآن بتتضاف للمستلم قبل كده، ولو وصلت للمطلوب البند بيتقفل "تم التوريد"
   // ---------------------------------------------------------------------
-  const markSupplied = async (orderId: number, list: PurchaseItem[]) => {
-    const open = list.filter(it => it.status === "مفتوح");
-    if (open.length === 0) { toast.error("مفيش بنود مفتوحة للتسجيل"); return; }
+  const openReceive = (orderId: number, list: PurchaseItem[]) => {
+    const open = list.filter(it => isOpenItem(it.status));
+    if (open.length === 0) { toast.error("مفيش بنود مفتوحة للتوريد"); return; }
+    setReceiveOrderId(orderId);
+    setReceiveItems(open);
+    setReceiveQty(Object.fromEntries(open.map(it => [it.id, String(Math.max(0, it.quantity - it.received_qty))])));
+  };
+
+  const closeReceive = () => { setReceiveOrderId(null); setReceiveItems([]); setReceiveQty({}); };
+
+  // الكمية اللي هتتسجل لكل بند (بتتقص على المتبقي عشان مايتعداش المطلوب)
+  const receiveRows = receiveItems.map(it => {
+    const remaining = Math.max(0, it.quantity - it.received_qty);
+    const raw = parseFloat(receiveQty[it.id] ?? "");
+    const now = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), remaining) : 0;
+    const total = it.received_qty + now;
+    const status = total >= it.quantity ? "تم التوريد" : total > 0 ? "تم التوريد جزئيا" : it.status;
+    return { item: it, remaining, now, total, status };
+  });
+  const receiveTotal = receiveRows.reduce((a, r) => a + r.now, 0);
+
+  const submitReceive = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (receiveOrderId == null || saving) return;
+    const rows = receiveRows.filter(r => r.now > 0);
+    if (rows.length === 0) { toast.error("ادخل كمية أكبر من صفر"); return; }
     const ok = await confirm({
-      title: open.length === 1 ? "تسجيل توريد البند؟" : `تسجيل توريد ${open.length} بند؟`,
-      message: <>هيتسجلوا كـ <span className="font-semibold text-text">تم التوريد</span> بتاريخ النهاردة.</>,
+      title: rows.length === 1 ? "تسجيل التوريد؟" : `تسجيل توريد ${rows.length} بند؟`,
+      message: <>هيتسجل التوريد بتاريخ النهاردة، والبنود اللي اتوردت كلها هتتقفل كـ <span className="font-semibold text-text">تم التوريد</span>، والباقي كـ <span className="font-semibold text-text">تم التوريد جزئيا</span>.</>,
       confirmText: "تسجيل التوريد",
     });
     if (!ok) return;
-    const ids = open.map(it => it.id);
-    const { error } = await supabase.from("purchase_items")
-      .update({ status: "تم التوريد", supply_date: todayStr }).in("id", ids);
-    if (error) { toast.error(error.message); return; }
-    const doneIds = new Set(ids);
-    setOrders(prev => prev.map(o => o.id === orderId ? {
+    setSaving(true);
+    for (const r of rows) {
+      const { error } = await supabase.from("purchase_items")
+        .update({ received_qty: r.total, status: r.status, supply_date: todayStr })
+        .eq("id", r.item.id);
+      if (error) { toast.error(error.message); setSaving(false); return; }
+    }
+    const byId = new Map(rows.map(r => [r.item.id, r]));
+    setOrders(prev => prev.map(o => o.id === receiveOrderId ? {
       ...o,
-      purchase_items: o.purchase_items.map(it => doneIds.has(it.id)
-        ? { ...it, status: "تم التوريد", supply_date: todayStr } : it),
+      purchase_items: o.purchase_items.map(it => {
+        const r = byId.get(it.id);
+        return r ? { ...it, received_qty: r.total, status: r.status, supply_date: todayStr } : it;
+      }),
     } : o));
-    setSelItems(prev => { const n = new Set(prev); doneIds.forEach(id => n.delete(id)); return n; });
-    toast.success(`تم تسجيل توريد ${open.length} بند`);
+    setSelItems(prev => { const n = new Set(prev); rows.forEach(r => n.delete(r.item.id)); return n; });
+    closeReceive(); setSaving(false);
+    toast.success(`تم تسجيل توريد ${rows.length} بند`);
   };
 
   const removeItem = async (orderId: number, item: PurchaseItem) => {
@@ -363,8 +417,10 @@ export default function PurchasesClient({
   };
 
   const addItemOrder = addItemOrderId !== null ? orders.find(o => o.id === addItemOrderId) : undefined;
+  const receiveOrder = receiveOrderId !== null ? orders.find(o => o.id === receiveOrderId) : undefined;
 
-  const newOrderButton = (
+  // قسم الشراء مايضيفش أوامر جديدة، بيسجل التوريد بس
+  const newOrderButton = isPurchaseDept ? undefined : (
     <button type="button" onClick={() => setAddOrderOpen(true)} className="eg-btn-primary eg-btn-sm">
       <Plus className="size-3.5" />أمر شراء جديد
     </button>
@@ -385,7 +441,7 @@ export default function PurchasesClient({
             <EmptyState
               icon={ShoppingCart}
               message="لسه مفيش أوامر شراء"
-              description="ابدأ بإضافة أول أمر شراء ببنوده وصور الفاتورة."
+              description={isPurchaseDept ? "مفيش أوامر شراء دلوقتي." : "ابدأ بإضافة أول أمر شراء ببنوده وصور الفاتورة."}
               action={newOrderButton}
             />
           </div>
@@ -393,6 +449,7 @@ export default function PurchasesClient({
           <div className="eg-stagger space-y-3">
             {orders.map(order => {
               const count = order.purchase_items.length;
+              const showActions = canEditOrder(order) || canReceive;
               return (
                 <details key={order.id} open className="eg-card group overflow-hidden !p-0">
                   <summary className="flex cursor-pointer select-none list-none flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 outline-none transition-colors hover:bg-card2/40 focus-visible:bg-card2/60 group-open:border-b group-open:border-border/60 [&::-webkit-details-marker]:hidden">
@@ -425,36 +482,34 @@ export default function PurchasesClient({
                         </button>
                       )}
                       {canEditOrder(order) && (
-                        <>
-                          <Tooltip content="تعديل الأمر">
-                            <button type="button" aria-label="تعديل أمر الشراء"
-                              onClick={e => { e.preventDefault(); openEditOrder(order); }}
-                              className="eg-icon-btn">
-                              <Pencil className="size-3.5" />
-                            </button>
-                          </Tooltip>
-                          {isAdmin && (
-                            <Tooltip content="حذف الأمر">
-                              <button type="button" aria-label="حذف أمر الشراء"
-                                onClick={e => { e.preventDefault(); removeOrder(order); }}
-                                className="eg-icon-btn-danger">
-                                <Trash2 className="size-3.5" />
-                              </button>
-                            </Tooltip>
-                          )}
-                        </>
+                        <Tooltip content="تعديل الأمر">
+                          <button type="button" aria-label="تعديل أمر الشراء"
+                            onClick={e => { e.preventDefault(); openEditOrder(order); }}
+                            className="eg-icon-btn">
+                            <Pencil className="size-3.5" />
+                          </button>
+                        </Tooltip>
+                      )}
+                      {isFullAdmin && (
+                        <Tooltip content="حذف الأمر">
+                          <button type="button" aria-label="حذف أمر الشراء"
+                            onClick={e => { e.preventDefault(); removeOrder(order); }}
+                            className="eg-icon-btn-danger">
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </Tooltip>
                       )}
                     </div>
                   </summary>
 
-                  {isAdmin && (() => {
+                  {canReceive && (() => {
                     const selHere = order.purchase_items.filter(it => selItems.has(it.id));
                     return selHere.length > 0 ? (
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-accent/5 px-4 py-2">
                         <span className="text-xs text-text">تم تحديد <span className="font-bold tabular-nums">{selHere.length}</span> بند</span>
                         <div className="flex items-center gap-2">
                           <button type="button" onClick={() => setSelItems(new Set())} className="eg-btn-ghost eg-btn-sm">إلغاء</button>
-                          <button type="button" onClick={() => markSupplied(order.id, selHere)} className="eg-btn-primary eg-btn-sm">
+                          <button type="button" onClick={() => openReceive(order.id, selHere)} className="eg-btn-primary eg-btn-sm">
                             <PackageCheck className="size-3.5" />تسجيل التوريد
                           </button>
                         </div>
@@ -463,27 +518,28 @@ export default function PurchasesClient({
                   })()}
                   {count > 0 ? (
                     <div className="overflow-x-auto">
-                      <table className="eg-table min-w-[720px]">
+                      <table className="eg-table min-w-[760px]">
                         <thead>
                           <tr>
-                            {isAdmin && <th className="w-10"><span className="sr-only">تحديد</span></th>}
+                            {canReceive && <th className="w-10"><span className="sr-only">تحديد</span></th>}
                             <th>الصنف</th>
                             <th className="w-24">الكمية</th>
+                            <th className="w-28">المستلم</th>
                             <th className="w-24">الفئة</th>
                             <th className="w-36">التوريد المتوقع</th>
                             <th className="w-36">التوريد الفعلي</th>
                             <th className="w-28">الحالة</th>
-                            {canEditOrder(order) && <th className="w-20"><span className="sr-only">إجراءات</span></th>}
+                            {showActions && <th className="w-24"><span className="sr-only">إجراءات</span></th>}
                           </tr>
                         </thead>
                         <tbody>
                           {order.purchase_items.map(item => {
-                            const late = !!item.expected_supply_date && item.expected_supply_date < todayStr && item.status === "مفتوح";
+                            const late = !!item.expected_supply_date && item.expected_supply_date < todayStr && isOpenItem(item.status);
                             return (
                               <tr key={item.id}>
-                                {isAdmin && (
+                                {canReceive && (
                                   <td>
-                                    {item.status === "مفتوح" && (
+                                    {isOpenItem(item.status) && (
                                       <input type="checkbox" aria-label={`تحديد ${item.item_name}`}
                                         checked={selItems.has(item.id)}
                                         onChange={() => setSelItems(prev => {
@@ -495,6 +551,7 @@ export default function PurchasesClient({
                                 )}
                                 <td className="font-medium text-text">{item.item_name}</td>
                                 <td className="tabular-nums">{item.quantity}</td>
+                                <td className="tabular-nums text-subtext">{item.received_qty} / {item.quantity}</td>
                                 <td className="text-subtext">{item.category}</td>
                                 <td className={cn("tabular-nums", late ? "font-semibold text-danger" : "text-subtext")}>
                                   {item.expected_supply_date ?? "—"}
@@ -502,24 +559,26 @@ export default function PurchasesClient({
                                 </td>
                                 <td className="tabular-nums text-subtext">{item.supply_date ?? "—"}</td>
                                 <td><Badge label={item.status} /></td>
-                                {canEditOrder(order) && (
+                                {showActions && (
                                   <td>
                                     <div className="flex items-center justify-end gap-0.5">
-                                      {isAdmin && item.status === "مفتوح" && (
+                                      {canReceive && isOpenItem(item.status) && (
                                         <Tooltip content="تسجيل التوريد">
-                                          <button type="button" onClick={() => markSupplied(order.id, [item])}
+                                          <button type="button" onClick={() => openReceive(order.id, [item])}
                                             className="eg-icon-btn" aria-label="تسجيل توريد البند">
                                             <PackageCheck className="size-3.5" />
                                           </button>
                                         </Tooltip>
                                       )}
-                                      <Tooltip content="تعديل">
-                                        <button type="button" onClick={() => openEditItem(item)}
-                                          className="eg-icon-btn" aria-label="تعديل البند">
-                                          <Pencil className="size-3.5" />
-                                        </button>
-                                      </Tooltip>
-                                      {isAdmin && (
+                                      {canEditOrder(order) && (
+                                        <Tooltip content="تعديل">
+                                          <button type="button" onClick={() => openEditItem(item)}
+                                            className="eg-icon-btn" aria-label="تعديل البند">
+                                            <Pencil className="size-3.5" />
+                                          </button>
+                                        </Tooltip>
+                                      )}
+                                      {isFullAdmin && (
                                         <Tooltip content="حذف">
                                           <button type="button" onClick={() => removeItem(order.id, item)}
                                             className="eg-icon-btn-danger" aria-label="حذف البند">
@@ -601,6 +660,51 @@ export default function PurchasesClient({
           <button type="submit" disabled={saving} className="eg-btn-success w-full">
             {saving ? <Spinner /> : <Save className="size-4" />}
             {saving ? "جاري الحفظ..." : "حفظ التعديل"}
+          </button>
+        </form>
+      </Modal>
+
+      {/* تسجيل التوريد: كامل أو جزئي بالكمية */}
+      <Modal open={receiveOrderId !== null} onClose={closeReceive} title="تسجيل التوريد"
+        description={receiveOrder
+          ? <>أمر الشراء <span className="font-mono">{orderLabel(receiveOrder)}</span> — اكتب الكمية اللي وصلت دلوقتي لكل بند</>
+          : undefined}>
+        <form onSubmit={submitReceive} className="space-y-4">
+          <div className="overflow-x-auto">
+            <table className="eg-table min-w-[480px]">
+              <thead>
+                <tr>
+                  <th>الصنف</th>
+                  <th className="w-20">المطلوب</th>
+                  <th className="w-24">المستلم قبل كده</th>
+                  <th className="w-32">وصل دلوقتي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receiveRows.map(r => (
+                  <tr key={r.item.id}>
+                    <td className="font-medium text-text">{r.item.item_name}</td>
+                    <td className="tabular-nums">{r.item.quantity}</td>
+                    <td className="tabular-nums text-subtext">{r.item.received_qty}</td>
+                    <td>
+                      <input type="number" min="0" step="any" max={r.remaining}
+                        aria-label={`الكمية المستلمة من ${r.item.item_name}`}
+                        value={receiveQty[r.item.id] ?? ""}
+                        onChange={e => setReceiveQty(prev => ({ ...prev, [r.item.id]: e.target.value }))}
+                        className="eg-input tabular-nums" />
+                      <p className="mt-1 text-[11px] text-subtext">
+                        {r.now > 0 && r.total >= r.item.quantity ? "هيتقفل كـ تم التوريد" : r.now > 0 ? "توريد جزئي" : "المتبقي " + r.remaining}
+                      </p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-subtext">إجمالي الكمية المسجلة دلوقتي: <span className="font-semibold tabular-nums text-text">{receiveTotal}</span></p>
+          <button type="submit" disabled={saving || receiveTotal <= 0} className="eg-btn-primary w-full">
+            {saving ? <Spinner /> : <PackageCheck className="size-4" />}
+            {saving ? "جاري الحفظ..." : "تسجيل التوريد"}
           </button>
         </form>
       </Modal>

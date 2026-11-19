@@ -221,7 +221,7 @@ export default function DashboardClient({
     if (overallLate > 0) out.push({ text: `${overallLate} ${unit} متأخر عن موعد التسليم`, tone: "danger" });
     const stopped = rows.filter(r => r.status === "متوقف").length;
     if (stopped > 0) out.push({ text: `${stopped} ${unit} متوقف`, tone: "warning" });
-    const latePurchases = purchaseItems.filter(p => p.status === "مفتوح" && p.expected_supply_date && p.expected_supply_date < today);
+    const latePurchases = purchaseItems.filter(p => (p.status === "مفتوح" || p.status === "تم التوريد جزئيا") && p.expected_supply_date && p.expected_supply_date < today);
     if (latePurchases.length > 0) out.push({ text: `${latePurchases.length} صنف شراء متأخر التوريد`, tone: "warning", href: "/purchases" });
     const absent = attendance.filter(a => a.status === "غياب").length;
     if (absent > 2) out.push({ text: `${absent} غياب النهارده`, tone: "warning", href: "/attendance" });
@@ -236,7 +236,7 @@ export default function DashboardClient({
     return { present: c("حاضر"), absent: c("غياب"), mission: c("مأمورية"), leave: c("أجازة") };
   }, [attendance]);
 
-  const openPurchases = purchaseItems.filter(p => p.status === "مفتوح").length;
+  const openPurchases = purchaseItems.filter(p => p.status === "مفتوح" || p.status === "تم التوريد جزئيا").length;
 
   /* ═══════════════ تسليم / إلغاء تسليم (على البنود) ═══════════════ */
   const setJob = async (itemId: number, next: string) => {

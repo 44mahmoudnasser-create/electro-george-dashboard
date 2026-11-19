@@ -10,6 +10,8 @@ export default async function DashboardPage() {
   const supabase = createSupabaseServerClient();
   const { user, role, department } = await getUserRole();
   if (!user) redirect("/login");
+  // قسم الشراء مالوش داشبورد، بيدخل على طلبات الشراء على طول
+  if ((department ?? "").toLowerCase() === "purchase") redirect("/purchases");
 
   const isManager = role === "manager";
   const today = new Date().toISOString().split("T")[0];
