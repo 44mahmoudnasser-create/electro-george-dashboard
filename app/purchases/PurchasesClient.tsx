@@ -174,7 +174,7 @@ export default function PurchasesClient({
         order_no: newOrder.order_no.trim() || null,
         wo_id: newOrder.wo_id ? parseInt(newOrder.wo_id) : null,
         request_date: todayStr,
-        status: newOrder.status,
+        status: isManager ? newOrder.status : "جديد",
         department: department || null,
       })
       .select("*, work_order:work_orders(wo_number)")
@@ -192,7 +192,8 @@ export default function PurchasesClient({
       item_name: it.item_name,
       category: it.category,
       quantity: parseFloat(it.quantity) || 1,
-      status: it.status,
+      received_qty: isManager && it.status === "تم التوريد" ? (parseFloat(it.quantity) || 1) : 0,
+      status: isManager ? it.status : "مفتوح",
       expected_supply_date: it.expected_supply_date || null,
     }));
     const { data: insertedItems, error: itemsErr } = await supabase
@@ -279,8 +280,8 @@ export default function PurchasesClient({
       item_name: addItemForm.item_name,
       category: addItemForm.category,
       quantity,
-      received_qty: addItemForm.status === "تم التوريد" ? quantity : 0,
-      status: addItemForm.status,
+      received_qty: isManager && addItemForm.status === "تم التوريد" ? quantity : 0,
+      status: isManager ? addItemForm.status : "مفتوح",
       expected_supply_date: addItemForm.expected_supply_date || null,
     };
     const { data, error } = await supabase.from("purchase_items").insert(payload).select("*").single();
@@ -620,7 +621,7 @@ export default function PurchasesClient({
       {/* أمر شراء جديد + صوره + بنوده */}
       <Modal open={addOrderOpen} onClose={closeNewOrder} title="أمر شراء جديد">
         <form onSubmit={createOrder} className="space-y-5">
-          <OrderFields value={newOrder} onChange={patch => setNewOrder(f => ({ ...f, ...patch }))} wos={wos} autoFocus />
+          <OrderFields value={newOrder} onChange={patch => setNewOrder(f => ({ ...f, ...patch }))} wos={wos} autoFocus showStatus={isManager} />
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -638,7 +639,7 @@ export default function PurchasesClient({
                   )}
                 </div>
                 {/* البند الجديد بياخد التركيز أول ما يتضاف */}
-                <ItemFields value={item} onChange={patch => updateNewOrderItem(idx, patch)} autoFocus={idx > 0} />
+                <ItemFields value={item} onChange={patch => updateNewOrderItem(idx, patch)} autoFocus={idx > 0} showStatus={isManager} />
               </div>
             ))}
             <button type="button" onClick={addNewOrderRow} className="eg-btn-ghost eg-btn-sm w-full border-dashed">
@@ -718,7 +719,7 @@ export default function PurchasesClient({
           ? <>أمر الشراء <span className="font-mono">{orderLabel(addItemOrder)}</span>{addItemOrder.work_order?.wo_number && <> · <span className="font-mono">{addItemOrder.work_order.wo_number}</span></>}</>
           : undefined}>
         <form onSubmit={submitAddItem} className="space-y-5">
-          <ItemFields value={addItemForm} onChange={patch => setAddItemForm(f => ({ ...f, ...patch }))} autoFocus />
+          <ItemFields value={addItemForm} onChange={patch => setAddItemForm(f => ({ ...f, ...patch }))} autoFocus showStatus={isManager} />
           <button type="submit" disabled={saving || !addItemForm.item_name.trim()} className="eg-btn-primary w-full">
             {saving ? <Spinner /> : <Save className="size-4" />}
             {saving ? "جاري الحفظ..." : "حفظ البند"}
@@ -744,8 +745,8 @@ export default function PurchasesClient({
 // عناصر نموذج بند قابلة لإعادة الاستخدام (بدون صور - الصور على الأمر)
 // متعرفة برّه المكوّن الرئيسي علشان الحقول ماتتعملهاش mount من جديد مع كل حرف
 // ---------------------------------------------------------------------
-function ItemFields({ value, onChange, autoFocus }: {
-  value: ItemForm; onChange: (patch: Partial<ItemForm>) => void; autoFocus?: boolean;
+function ItemFields({ value, onChange, autoFocus, showStatus = true }: {
+  value: ItemForm; onChange: (patch: Partial<ItemForm>) => void; autoFocus?: boolean; showStatus?: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -766,23 +767,26 @@ function ItemFields({ value, onChange, autoFocus }: {
         <input type="date" value={value.expected_supply_date}
           onChange={e => onChange({ expected_supply_date: e.target.value })} className="eg-input" />
       </Field>
-      <Field label="الحالة" className="col-span-2 sm:col-span-1">
-        <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
-          {STATUSES.map(s => <option key={s}>{s}</option>)}
-        </select>
-      </Field>
+      {showStatus && (
+        <Field label="الحالة" className="col-span-2 sm:col-span-1">
+          <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
+            {STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </Field>
+      )}
     </div>
   );
 }
 
 // نموذج بيانات أمر الشراء نفسه: رقم الأمر + أمر الشغل + الحالة + الصور
-function OrderFields({ value, onChange, wos, currentImages, onRemoveCurrent, autoFocus }: {
+function OrderFields({ value, onChange, wos, currentImages, onRemoveCurrent, autoFocus, showStatus = true }: {
   value: OrderForm;
   onChange: (patch: Partial<OrderForm>) => void;
   wos: WOOption[];
   currentImages?: OrderImage[];
   onRemoveCurrent?: (img: OrderImage) => void;
   autoFocus?: boolean;
+  showStatus?: boolean;
 }) {
   const addFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -801,11 +805,13 @@ function OrderFields({ value, onChange, wos, currentImages, onRemoveCurrent, aut
             {wos.map(w => <option key={w.id} value={w.id}>{w.wo_number}</option>)}
           </select>
         </Field>
-        <Field label="حالة أمر الشراء">
-          <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
-            {ORDER_STATUSES.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
+        {showStatus && (
+          <Field label="حالة أمر الشراء">
+            <select value={value.status} onChange={e => onChange({ status: e.target.value })} className="eg-select">
+              {ORDER_STATUSES.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </Field>
+        )}
       </div>
       <Field label="صور الفاتورة / أمر الشراء (صورة واحدة على الأقل)">
         <div className="space-y-2">
